@@ -26,7 +26,7 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 | `fiber_ops.py` | Opérations entre fibres (moyenne, somme, médiane, min, max, écart-type, A−B, A+B, A/B…). |
 | `script_generator.py` | Génération des scripts Python autonomes exportés (style publication). |
 | `Plan_FIB_C12_V2.toml`, `Plan_FIB_C34_V1.toml` | Plans de fibres de C12 et C34 (indice, paramètres par fibre). |
-| `profils_3d_C12.csv`, `profils_3d_C34.csv` | Données de mesure (voir ci-dessous). |
+| `data/profils_3d_C12.csv`, `data/profils_3d_C34.csv` | Données de mesure (voir ci-dessous). |
 
 ## Format des CSV de données
 

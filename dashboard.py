@@ -265,8 +265,8 @@ st.sidebar.title("📁 Données")
 
 # 1. Définition des chemins
 cube_paths = {
-    "Cube 12": "../data/data_OBR/C12/profils_3d.csv",
-    "Cube 34": "../data/data_OBR/C34/profils_3d.csv"
+    "Cube 12": "data/profils_3d_C12.csv",
+    "Cube 34": "data/profils_3d_C34.csv"
 }
 
 # 2. Boutons de sélection (Radio pour conserver l'état)
