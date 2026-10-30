@@ -68,6 +68,24 @@ def cube_wireframe_trace(L=CUBE_SIDE_M, color="lightgray"):
                          hoverinfo="skip", showlegend=False)
 
 
+# Orientation physique du cube dans l'enceinte : l'axe X est vertical (X = 0 en haut),
+# Z est horizontal (gauche-droite) et Y est la profondeur. Les données restent dans le
+# repère du plan d'instrumentation ; seuls les tracés 3D sont réorientés.
+def view_xyz(x, y, z):
+    """(X, Y, Z) du plan d'instrumentation -> (horizontal, profondeur, vertical)."""
+    return z, y, x
+
+
+def view_scene(ticks=True, **kwargs):
+    """Scène Plotly 3D avec X vertical (0 en haut), Z horizontal."""
+    return dict(
+        xaxis=dict(title="Z (horizontal)" if ticks else "Z", showticklabels=ticks),
+        yaxis=dict(title="Y" if not ticks else "Y (profondeur)", showticklabels=ticks),
+        zaxis=dict(title="X (vertical, 0 = haut)" if ticks else "X",
+                   showticklabels=ticks, autorange="reversed"),
+        aspectmode="cube", **kwargs)
+
+
 def _face_quad(idx, val, others, L):
     pts = []
     for a, b in ((0, 0), (0, L), (L, L), (L, 0)):
@@ -84,7 +102,7 @@ def render_static_cube_png(df_all=None, highlight_seg=None, highlight_axis=None,
     """Image statique (PNG) et petite d'un cube filaire, avec option :
     - highlight_seg : surligne un segment précis (points + ligne rouge)
     - highlight_axis : ombre les 2 faces perpendiculaires à un axe (X/Y/Z)
-    Axes toujours mappés de façon cohérente : X=largeur, Y=profondeur, Z=hauteur."""
+    Orientation physique : X=hauteur (0 en haut), Y=profondeur, Z=largeur."""
     fig = plt.figure(figsize=figsize, dpi=140)
     ax = fig.add_subplot(111, projection="3d")
 
@@ -100,18 +118,18 @@ def render_static_cube_png(df_all=None, highlight_seg=None, highlight_axis=None,
         for val in (0, L):
             quad = _face_quad(idx, val, others, L)
             quad = np.vstack([quad, quad[0]])
-            ax.plot(quad[:, 0], quad[:, 1], quad[:, 2], color="crimson", linewidth=1.3)
+            ax.plot(*view_xyz(quad[:, 0], quad[:, 1], quad[:, 2]), color="crimson", linewidth=1.3)
 
     if df_all is not None and highlight_seg is not None:
         autres = df_all[df_all["segment"] != highlight_seg]
         sel = df_all[df_all["segment"] == highlight_seg]
-        ax.scatter(autres["X_m"], autres["Y_m"], autres["Z_m"], color="lightgray", s=1.5, alpha=0.4)
-        ax.plot(sel["X_m"], sel["Y_m"], sel["Z_m"], color="crimson", linewidth=1.8, marker="o", markersize=1.5)
+        ax.scatter(*view_xyz(autres["X_m"], autres["Y_m"], autres["Z_m"]), color="lightgray", s=1.5, alpha=0.4)
+        ax.plot(*view_xyz(sel["X_m"], sel["Y_m"], sel["Z_m"]), color="crimson", linewidth=1.8, marker="o", markersize=1.5)
 
-    ax.set_xlabel("X", fontsize=5, labelpad=-10)
+    ax.set_xlabel("Z", fontsize=5, labelpad=-10)
     ax.set_ylabel("Y", fontsize=5, labelpad=-10)
-    ax.set_zlabel("Z", fontsize=5, labelpad=-10)
-    ax.set_xlim(0, L); ax.set_ylim(0, L); ax.set_zlim(0, L)
+    ax.set_zlabel("X", fontsize=5, labelpad=-10)
+    ax.set_xlim(0, L); ax.set_ylim(0, L); ax.set_zlim(L, 0)  # X = 0 en haut
     ax.set_box_aspect((1, 1, 1))
     ax.tick_params(labelsize=3, pad=0)
     ax.view_init(elev=20, azim=-60)
@@ -133,9 +151,9 @@ def _fiber_line(ax, idx, L, color="royalblue"):
     p0[idx], p1[idx] = 0.0, L
     p0[others[0]] = p1[others[0]] = L / 2
     p0[others[1]] = p1[others[1]] = L / 2
-    ax.plot([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]],
+    ax.plot(*view_xyz([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]]),
             color=color, linewidth=2.2, solid_capstyle="round")
-    ax.scatter([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]],
+    ax.scatter(*view_xyz([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]]),
                color=color, s=8)
 
 
@@ -169,7 +187,7 @@ def render_combined_axis_schema(axes_presentes, kind="direct", figsize_per_cube=
             for val in (0, L):
                 quad = _face_quad(idx, val, others, L)
                 quad = np.vstack([quad, quad[0]])
-                ax.plot(quad[:, 0], quad[:, 1], quad[:, 2], color="crimson", linewidth=1.2)
+                ax.plot(*view_xyz(quad[:, 0], quad[:, 1], quad[:, 2]), color="crimson", linewidth=1.2)
         else:
             # 2 faces parallèles à l'axe mesuré : perpendiculaires à chacun
             # des 2 AUTRES axes (une face de référence par axe latéral)
@@ -177,12 +195,12 @@ def render_combined_axis_schema(axes_presentes, kind="direct", figsize_per_cube=
                 free_dims = [k for k in range(3) if k != o]
                 quad = _face_quad(o, 0, free_dims, L)
                 quad = np.vstack([quad, quad[0]])
-                ax.plot(quad[:, 0], quad[:, 1], quad[:, 2], color="darkorange", linewidth=1.2)
+                ax.plot(*view_xyz(quad[:, 0], quad[:, 1], quad[:, 2]), color="darkorange", linewidth=1.2)
 
         _fiber_line(ax, idx, L)
 
         ax.set_title(COMPOSANTE_LABEL[axe], fontsize=6, pad=2)
-        ax.set_xlim(0, L); ax.set_ylim(0, L); ax.set_zlim(0, L)
+        ax.set_xlim(0, L); ax.set_ylim(0, L); ax.set_zlim(L, 0)  # X = 0 en haut
         ax.set_box_aspect((1, 1, 1))
         ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
         ax.view_init(elev=20, azim=-60)
@@ -209,19 +227,18 @@ def make_small_interactive_cube(df_all, highlight_seg, L=CUBE_SIDE_M, height=140
     fig.add_trace(cube_wireframe_trace(L))
     autres = df_all[df_all["segment"] != highlight_seg]
     sel = df_all[df_all["segment"] == highlight_seg]
-    fig.add_trace(go.Scatter3d(x=autres["X_m"], y=autres["Y_m"], z=autres["Z_m"],
+    vx, vy, vz = view_xyz(autres["X_m"], autres["Y_m"], autres["Z_m"])
+    fig.add_trace(go.Scatter3d(x=vx, y=vy, z=vz,
                                 mode="markers", marker=dict(size=1.5, color="lightgray", opacity=0.4),
                                 hoverinfo="skip", showlegend=False))
-    fig.add_trace(go.Scatter3d(x=sel["X_m"], y=sel["Y_m"], z=sel["Z_m"],
+    vx, vy, vz = view_xyz(sel["X_m"], sel["Y_m"], sel["Z_m"])
+    fig.add_trace(go.Scatter3d(x=vx, y=vy, z=vz,
                                 mode="markers+lines",
                                 marker=dict(size=3, color="crimson"),
                                 line=dict(color="crimson", width=4),
                                 name=highlight_seg, showlegend=False))
     fig.update_layout(
-        scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z",
-                   aspectmode="cube",
-                   xaxis=dict(showticklabels=False), yaxis=dict(showticklabels=False),
-                   zaxis=dict(showticklabels=False)),
+        scene=view_scene(ticks=False),
         height=height, margin=dict(l=0, r=0, t=0, b=0),
     )
     return fig
@@ -233,7 +250,8 @@ def make_multi_cube(_df_all, segs_a, segs_b, L=CUBE_SIDE_M, height=170):
     fig.add_trace(cube_wireframe_trace(L))
     choisies = set(segs_a) | set(segs_b)
     autres = _df_all[~_df_all["segment"].isin(choisies)].drop_duplicates(["segment", "x_fibre_m"])
-    fig.add_trace(go.Scatter3d(x=autres["X_m"], y=autres["Y_m"], z=autres["Z_m"], mode="markers",
+    vx, vy, vz = view_xyz(autres["X_m"], autres["Y_m"], autres["Z_m"])
+    fig.add_trace(go.Scatter3d(x=vx, y=vy, z=vz, mode="markers",
                                 marker=dict(size=1.5, color="lightgray", opacity=0.4),
                                 hoverinfo="skip", showlegend=False))
     for segs, color in ((segs_a, "crimson"), (segs_b, "royalblue")):
@@ -247,12 +265,11 @@ def make_multi_cube(_df_all, segs_a, segs_b, L=CUBE_SIDE_M, height=170):
             ys += list(g["Y_m"]) + [None]
             zs += list(g["Z_m"]) + [None]
         if xs:
-            fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
+            vx, vy, vz = view_xyz(xs, ys, zs)
+            fig.add_trace(go.Scatter3d(x=vx, y=vy, z=vz, mode="lines",
                                         line=dict(color=color, width=5), showlegend=False))
     fig.update_layout(
-        scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z", aspectmode="cube",
-                   xaxis=dict(showticklabels=False), yaxis=dict(showticklabels=False),
-                   zaxis=dict(showticklabels=False)),
+        scene=view_scene(ticks=False),
         height=height, margin=dict(l=0, r=0, t=0, b=0))
     return fig
 
@@ -407,7 +424,7 @@ c4.metric("Écart-type", f"{df['valeur_microdefs'].std():.0f} µdef")
 tabs = st.tabs([
     "1️⃣ Effet direct", "2️⃣ Effet indirect", "3️⃣ Anisotropie",
     "4️⃣ Profil segment", "5️⃣ Effet de coin", "6️⃣ Carto 3D",
-    "7️⃣ Symétrie H/B", "8️⃣ Heatmap seg×date", "9️⃣ Surface pos×temps",
+    "7️⃣ Symétrie Z< vs Z≥", "8️⃣ Heatmap seg×date", "9️⃣ Surface pos×temps",
     "🔟 Opérations fibres",
 ])
 
@@ -674,6 +691,7 @@ mesure réellement à cet endroit (indiquée en info-bulle).
             coords = {"X": ([0, CUBE_SIDE_M], [a, a], [b, b]),
                       "Y": ([a, a], [0, CUBE_SIDE_M], [b, b]),
                       "Z": ([a, a], [b, b], [0, CUBE_SIDE_M])}[ARMATURE_AXIS]
+            coords = view_xyz(*coords)
             static_traces.append(go.Scatter3d(
                 x=coords[0], y=coords[1], z=coords[2], mode="lines",
                 line=dict(color="dimgray", width=2), hoverinfo="skip", showlegend=False))
@@ -687,8 +705,9 @@ mesure réellement à cet endroit (indiquée en info-bulle).
             vmin_d, vmax_d = get_color_range(s["valeur_microdefs"], None, None, True)
         else:
             vmin_d, vmax_d = get_color_range(df["valeur_microdefs"], manual_vmin, manual_vmax, auto_scale)
+        vx, vy, vz = view_xyz(s["X_m"], s["Y_m"], s["Z_m"])
         frames.append(go.Frame(
-            data=[go.Scatter3d(x=s["X_m"], y=s["Y_m"], z=s["Z_m"], mode="markers",
+            data=[go.Scatter3d(x=vx, y=vy, z=vz, mode="markers",
                                 marker=dict(size=4, color=s["valeur_microdefs"], colorscale=colormap_choice,
                                             cmin=vmin_d, cmax=vmax_d, colorbar=dict(title="µdef"),
                                             line=dict(width=0.5, color="rgba(0,0,0,0.35)")),
@@ -700,8 +719,7 @@ mesure réellement à cet endroit (indiquée en info-bulle).
     if frames:
         fig = go.Figure(data=[frames[0].data[0]] + static_traces, frames=frames)
         fig.update_layout(
-            scene=dict(xaxis_title="X (m)", yaxis_title="Y (m)", zaxis_title="Z (m)",
-                       aspectmode="cube"),
+            scene=view_scene(),
             height=650,
             sliders=[dict(steps=steps, currentvalue=dict(prefix="Temps écoulé : "))])  # pas de updatemenus => pas de bouton Play
         st.plotly_chart(fig, width="stretch", key="plot_carto3d")
@@ -709,24 +727,25 @@ mesure réellement à cet endroit (indiquée en info-bulle).
         with st.expander("📜 Script Python reproductible (notebook)"):
             st.code(sg.gen_carto3d(), language="python")
 
-# ---------------------------------------------------------- 7. symétrie H/B
+# ---------------------------------------------------------- 7. symétrie moitiés Z
 with tabs[6]:
-    st.subheader("Symétrie face haute (Z ≈ 100 mm) vs face basse (Z ≈ 0)")
+    st.subheader("Symétrie des deux moitiés : côté Z < 50 mm vs côté Z ≥ 50 mm")
     st.markdown("""
 **Post-traitement :** les points sont répartis en deux groupes selon leur position par
-rapport au plan médian du cube (`Z_m < 50 mm` → face basse, sinon face haute), puis moyennés
-par profondeur nominale et date.
+rapport au plan médian du cube (`Z_m < 50 mm` ou `Z_m ≥ 50 mm`), puis moyennés
+par profondeur nominale et date. Z est horizontal (gauche-droite) : ce n'est pas une
+comparaison haut/bas.
 
-**Lecture physique :** en l'absence d'asymétrie d'exposition (même carbonatation en haut
-et en bas), les deux courbes devraient être proches. Un écart systématique peut révéler une
-différence d'exposition (ex. face posée au sol vs face libre), un gradient de séchage
-initial, ou une hétérogénéité de mise en œuvre du matériau.
+**Lecture physique :** en l'absence d'asymétrie d'exposition, les deux courbes devraient
+être proches. Un écart systématique peut révéler une différence d'exposition (position du
+cube dans le bac, circulation du gaz), un gradient de séchage initial, ou une
+hétérogénéité de mise en œuvre du matériau.
     """)
     d = df.dropna(subset=["plan_profondeur_mm"]).copy()
     if d.empty:
         st.info("Aucun segment de plan de profondeur dans la sélection actuelle.")
     else:
-        d["face_z"] = np.where(d["Z_m"] < CUBE_SIDE_M / 2, "Face basse (Z ≈ 0)", "Face haute (Z ≈ 100 mm)")
+        d["face_z"] = np.where(d["Z_m"] < CUBE_SIDE_M / 2, "Côté Z < 50 mm", "Côté Z ≥ 50 mm")
         g = d.groupby(["plan_profondeur_mm", "face_z", "date_mesure"], as_index=False).agg(
             moy=("valeur_microdefs", "mean"), t=("temps_ecoule_j", "first"))
         fig = px.line(g, x="t", y="moy", color="face_z", facet_col="plan_profondeur_mm", markers=True,

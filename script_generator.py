@@ -421,7 +421,7 @@ for d in dates:
     label = f"{heures:.1f} h"
     frames.append(go.Frame(
         data=[go.Scatter3d(
-            x=s["X_m"], y=s["Y_m"], z=s["Z_m"], mode="markers",
+            x=s["Z_m"], y=s["Y_m"], z=s["X_m"], mode="markers",
             marker=dict(size=4, color=s["valeur_microdefs"], colorscale="RdBu_r",
                         cmin=vmin_d, cmax=vmax_d, colorbar=dict(title="µdef"),
                         line=dict(width=0.5, color="black")),
@@ -436,8 +436,9 @@ fig.update_layout(
     template="simple_white",
     font=dict(family="Times New Roman, serif", size=13, color="black"),
     title="Cartographie 3D du champ de déformation",
-    scene=dict(xaxis_title="X (m)", yaxis_title="Y (m)", zaxis_title="Z (m)",
-               aspectmode="cube"),
+    scene=dict(xaxis_title="Z (m) — horizontal", yaxis_title="Y (m)",
+               zaxis_title="X (m) — vertical (0 = haut)",
+               zaxis=dict(autorange="reversed"), aspectmode="cube"),
     width=850, height=700, paper_bgcolor="white",
     sliders=[dict(steps=steps, currentvalue=dict(prefix="Temps écoulé : "))],
 )
@@ -448,11 +449,11 @@ fig.update_layout(
 # ------------------------------------------------------------------ onglet 7
 
 def gen_symetrie(dates_filter=None) -> str:
-    titre = "Symétrie face haute vs face basse"
+    titre = "Symétrie des deux moitiés (Z < 50 mm vs Z ≥ 50 mm)"
     body = '''
-# --- Figure : Symétrie face haute (Z≈100mm) vs face basse (Z≈0) ---
+# --- Figure : Symétrie côté Z < 50 mm vs côté Z ≥ 50 mm (Z horizontal) ---
 d = df.dropna(subset=["plan_profondeur_mm"]).copy()
-d["face_z"] = np.where(d["Z_m"] < CUBE_SIDE_M / 2, "Face basse (Z≈0)", "Face haute (Z≈100mm)")
+d["face_z"] = np.where(d["Z_m"] < CUBE_SIDE_M / 2, "Côté Z < 50 mm", "Côté Z ≥ 50 mm")
 g = d.groupby(["plan_profondeur_mm", "face_z", "date_mesure"], as_index=False).agg(
     moy=("valeur_microdefs", "mean"), t=("temps_ecoule_j", "first"))
 
@@ -466,7 +467,7 @@ for prof in sorted(g["plan_profondeur_mm"].unique()):
                                   marker=dict(size=7), name=face))
     fig = apply_publication_style(
         fig, xlabel="Temps écoulé (j)", ylabel="Déformation moyenne (µdef)",
-        title=f"Symétrie H/B — profondeur {prof} mm")
+        title=f"Symétrie des deux moitiés — profondeur {prof} mm")
     fig.show()
     # fig.write_image(f"symetrie_{prof}mm.png", scale=3)
 '''
