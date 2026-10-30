@@ -45,3 +45,39 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 pip install streamlit pandas numpy scipy plotly matplotlib
 streamlit run dashboard.py
 ```
+
+## **Discussion des données à négliger**
+
+Cette section sert à décider quelles données sont conservées pour l'étude des déformations.
+
+### C12 : asymétrie entre les deux moitiés (Z)
+
+Observations (microdéformations médianes, essai de 113 jours) :
+
+| Zone (segments Z s1 et s3) | C12 | C34 (s3) |
+|---|---|---|
+| Z ≈ 5-25 mm | −5100 à −5500 µε | −4700 µε |
+| Z ≈ 40-60 mm (cœur) | −1200 µε | −1100 µε |
+| Z ≈ 75-95 mm | −600 à −1800 µε | −3600 µε |
+
+- Dans C12, un côté du cube (Z faible) se contracte jusqu'à environ −6000 µε, tandis que l'autre (Z fort) se contracte très peu.
+- Dans C34, les deux extrémités se contractent de façon comparable. La moitié concernée de C12 est donc anormale, et ce n'est pas une propriété du matériau.
+- Segments de la moitié peu contractée de C12 (fibre V2, Z > 50 mm) : s4 à s12. Leur déformation finale va de +460 à −2000 µε, et plusieurs sont proches de 0 (s10, s11, s12).
+- La moitié opposée de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
+
+Hypothèse : l'accès au CO₂ est limité d'un côté du cube C12 (cube au fond d'un bac ouvert), ou le matériau consomme plus de CO₂ qu'il n'en arrive localement.
+
+À vérifier avant de trancher :
+- quelle face est Z = 0 (haut ou fond du bac) ;
+- la profondeur carbonatée par face (phénolphtaléine après découpe).
+
+Décision proposée :
+- **À écarter** de l'analyse de carbonatation homogène : C12 s4 à s12.
+- **À conserver** : C12 s1 à s3 (en précisant la zone), C12 s14 à s23, et tous les segments de C34.
+- Ne pas supprimer s4 à s12 des fichiers : les garder en groupe séparé « zone peu carbonatée ».
+
+### C34 : segments absents et bruit
+
+- Les fibres ont été coupées à deux endroits. Seuls s1 à s5 et s14 à s19 existent (s6 à s13 et s20 à s23 sont absents).
+- s1 s'arrête vers √t ≈ 7,3 j^½ ; s5 n'a que 68 points par profil (106 pour C12).
+- Le signal est plus bruité, avec des paliers brusques (s16, s17, s19). Il faut lisser avant d'interpréter les écarts avec C12.
