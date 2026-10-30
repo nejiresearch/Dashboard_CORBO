@@ -76,7 +76,29 @@ Observations (microdéformations médianes, essai de 113 jours) :
   - s4 et s5 (Z = 70 mm, plan à 30 mm de l'interface) se comportent comme leurs homologues symétriques s22 et s23 (Z = 30 mm) : corrélation de 0,97 à 0,99 sur toute la durée, et −890 à −1970 µε contre −1060 à −1220 µε. Le comportement de C34 aux mêmes positions est cohérent (environ −1000 µε).
 - Le côté Z faible de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
 
-Cause à déterminer. L'hypothèse initiale (fond du bac peu accessible au CO₂) ne tient plus, car l'asymétrie est selon Z (horizontal). Pistes : position du cube dans le bac (proximité d'une paroi), circulation du gaz dans l'enceinte, hétérogénéité de mise en œuvre.
+Cause à déterminer. L'hypothèse initiale (fond du bac peu accessible au CO₂) ne tient plus, car l'asymétrie est selon Z (horizontal).
+
+#### Hypothèse en cours : ségrégation lors de la coulée
+
+- Le matériau est un mélange fumée de silice et clinker, visant une hydratation de type bas-pH : pas de portlandite, seulement des C-S-H et quelques phases aluminates.
+- Entre la gâchée et l'analyse, le cube a été retourné de 90°. Une des deux fibres et ses segments se trouvent donc du côté qui était le fond du moule.
+- Une ségrégation aurait eu lieu à la coulée, la fumée de silice étant moins dense que le clinker et les fibres gênant le mélange.
+  - Côté haut du moule : Ca/Si bas, peu de portlandite, beaucoup de C-S-H, donc retrait de carbonatation important (lié aux C-S-H).
+  - Côté fond du moule : beaucoup plus de portlandite, dont la carbonatation entraîne un retrait plus faible.
+
+Éléments cohérents avec l'hypothèse :
+- Le retrait de carbonatation vient surtout de la décalcification des C-S-H. La carbonatation de la portlandite contribue peu, voire peut gonfler (cohérent avec +460 µε sur s11).
+- La portlandite qui se carbonate comble la porosité, ce qui ralentit le CO₂ côté fond. Les deux effets vont dans le même sens.
+
+Points de prudence :
+- La cause est plus probablement le ressuage et la sédimentation du clinker que la différence de densité seule. Les fibres, très fines, gênent peu le mélange.
+- Une sédimentation donnerait un gradient progressif. Or s4 et s5 (Z = 70 mm) se comportent comme s22 et s23, et l'écart n'apparaît qu'à Z ≥ 84 mm, donc sur une couche mince.
+- Si C34 a été coulé de la même façon, il devrait montrer la même asymétrie, or elle y est modérée.
+
+À vérifier :
+- Le côté Z fort (fibre V2) est-il bien le côté qui était au fond du moule ?
+- C34 a-t-il été coulé ou retourné différemment ?
+- ATG ou DRX (portlandite) et EDS (Ca/Si) sur des tranches de chaque moitié, ainsi que porosimétrie.
 
 À vérifier : la profondeur carbonatée par face (phénolphtaléine après découpe), pour chacune des six faces.
 
