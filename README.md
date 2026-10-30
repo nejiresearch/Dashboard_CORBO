@@ -63,7 +63,9 @@ Observations (microdéformations médianes, essai de 113 jours) :
 - Convention : Z = 0 correspond au **haut** du cube, donc Z = 100 mm est le **fond** (côté fond du bac).
 - Dans C12, le haut (Z faible) se contracte jusqu'à environ −6000 µε, tandis que le fond (Z fort) se contracte très peu.
 - Dans C34, le haut et le fond se contractent de façon comparable. Le fond de C12 est donc anormal, et ce n'est pas une propriété du matériau.
-- Segments de la moitié basse (fond) de C12 (fibre V2, Z > 50 mm) : s4 à s12. Leur déformation finale va de +460 à −2000 µε, et plusieurs sont proches de 0 (s10, s11, s12).
+- Segments de la moitié basse (fond) de C12 (fibre V2, Z > 50 mm) : s4 à s12.
+  - s6 à s12 (Z ≥ 84 mm) se contractent peu : de +460 à −1300 µε, et s10, s11 et s12 sont proches de 0.
+  - s4 et s5 (Z = 70 mm, plan à 30 mm de l'interface) se comportent comme leurs homologues symétriques s22 et s23 (Z = 30 mm) : corrélation de 0,97 à 0,99 sur toute la durée, et −890 à −1970 µε contre −1060 à −1220 µε. Le comportement de C34 aux mêmes positions est cohérent (environ −1000 µε).
 - La moitié haute de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
 
 Hypothèse (cohérente avec l'orientation) : le fond du cube C12, au fond d'un bac ouvert, a un accès limité au CO₂, ou le matériau y consomme plus de CO₂ qu'il n'en arrive localement.
@@ -71,9 +73,9 @@ Hypothèse (cohérente avec l'orientation) : le fond du cube C12, au fond d'un b
 À vérifier : la profondeur carbonatée par face (phénolphtaléine après découpe), en particulier sur la face du fond.
 
 Décision proposée :
-- **À écarter** de l'analyse de carbonatation homogène : C12 s4 à s12.
-- **À conserver** : C12 s1 à s3 (en précisant la zone), C12 s14 à s23, et tous les segments de C34.
-- Ne pas supprimer s4 à s12 des fichiers : les garder en groupe séparé « zone peu carbonatée ».
+- **À écarter** de l'analyse de carbonatation homogène : C12 s6 à s12.
+- **À conserver** : C12 s4 et s5, C12 s1 à s3 (en précisant la zone), C12 s14 à s23, et tous les segments de C34.
+- Ne pas supprimer s6 à s12 des fichiers : les garder en groupe séparé « zone peu carbonatée ».
 
 ### C34 : segments absents et bruit
 
