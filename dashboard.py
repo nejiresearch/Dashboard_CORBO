@@ -273,6 +273,17 @@ def make_multi_cube(_df_all, segs_a, segs_b, L=CUBE_SIDE_M, height=170):
         height=height, margin=dict(l=0, r=0, t=0, b=0))
     return fig
 
+@st.cache_data(show_spinner=False)
+def interpolate_grid(x, t, z, n_x=150, n_t=60):
+    """Interpolation griddata mise en cache : évite de relancer scipy à
+    chaque interaction Streamlit sur un onglet différent."""
+    xi = np.linspace(x.min(), x.max(), n_x)
+    ti = np.linspace(t.min(), t.max(), n_t)
+    XI, TI = np.meshgrid(xi, ti)
+    ZI = griddata((x, t), z, (XI, TI), method="linear")
+    return xi, ti, ZI
+
+
 # ---------------------------------------------------------------- chargement
 @st.cache_data
 def get_data(file) -> pd.DataFrame:
