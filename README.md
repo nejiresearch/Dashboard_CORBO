@@ -32,6 +32,7 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 | `date_filter.py` | Sélection des dates affichées selon un ΔT minimal (linéaire, √t, ln(1+t)). |
 | `fiber_ops.py` | Opérations entre fibres (moyenne, somme, médiane, min, max, écart-type, A−B, A+B, A/B…). |
 | `script_generator.py` | Génération des scripts Python autonomes exportés (style publication). |
+| `fit_retrait.py` | Fit pseudo-physique du retrait de la matrice (diffusion 3D du CO₂ + cinétique de réaction, ajustement de l'enveloppe basse). Voir ci-dessous. |
 | `Plan_FIB_C12_V2.toml`, `Plan_FIB_C34_V1.toml` | Plans de fibres de C12 et C34 (indice, paramètres par fibre). |
 | `data/profils_3d_C12.csv`, `data/profils_3d_C34.csv` | Données de mesure (voir ci-dessous). |
 
@@ -112,3 +113,15 @@ Décision proposée :
 - Les fibres ont été coupées à deux endroits. Seuls s1 à s5 et s14 à s19 existent (s6 à s13 et s20 à s23 sont absents).
 - s1 s'arrête vers √t ≈ 7,3 j^½ ; s5 n'a que 68 points par profil (106 pour C12).
 - Le signal est plus bruité, avec des paliers brusques (s16, s17, s19). Il faut lisser avant d'interpréter les écarts avec C12.
+
+## Fit du retrait de carbonatation (`fit_retrait.py`)
+
+```bash
+python fit_retrait.py --plot fit_C12.png
+```
+
+- Modèle : ε = −a·α^n, avec α = 1 − exp(−k·∫c dt), où c est la concentration de CO₂ normalisée donnée par la diffusion 3D séparable depuis les six faces (coefficient D).
+- La déformation mesurée est la somme du retrait de la matrice et de l'ouverture de fissures (≥ 0). On ajuste l'enveloppe basse, avec un poids de 0,1 sur les résidus où la mesure est au-dessus du modèle (fissures).
+- Les segments C12 s6 à s12 sont exclus. Les points hors du cube sont ignorés.
+- Résultat sur C12 : D ≈ 9,7·10⁻¹² m²/s, k ≈ 0,039 j⁻¹, a ≈ 5830 µε, n ≈ 0,51. Les mêmes paramètres appliqués à C34 donnent un écart du même ordre (RMSE sous l'enveloppe : 914 µε contre 1008 µε pour C12).
+- Limites : seul D est robuste face au choix du poids asymétrique, et a, n, k en dépendent. Les creux à −8000 µε près des faces et les pics de fissuration ne sont pas modélisés.
