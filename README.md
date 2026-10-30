@@ -32,7 +32,7 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 | `date_filter.py` | Sélection des dates affichées selon un ΔT minimal (linéaire, √t, ln(1+t)). |
 | `fiber_ops.py` | Opérations entre fibres (moyenne, somme, médiane, min, max, écart-type, A−B, A+B, A/B…). |
 | `script_generator.py` | Génération des scripts Python autonomes exportés (style publication). |
-| `fit_retrait.py` | Fit pseudo-physique du retrait de la matrice (diffusion 3D du CO₂ + cinétique de réaction, ajustement de l'enveloppe basse). Voir ci-dessous. |
+| `fit_retrait.py` | Fit pseudo-physique du retrait de la matrice (réaction-diffusion couplée du CO₂, ajustement de l'enveloppe basse). Voir ci-dessous. |
 | `Plan_FIB_C12_V2.toml`, `Plan_FIB_C34_V1.toml` | Plans de fibres de C12 et C34 (indice, paramètres par fibre). |
 | `data/profils_3d_C12.csv`, `data/profils_3d_C34.csv` | Données de mesure (voir ci-dessous). |
 
@@ -120,8 +120,9 @@ Décision proposée :
 python fit_retrait.py --plot fit_C12.png
 ```
 
-- Modèle : ε = −a·α^n, avec α = 1 − exp(−k·∫c dt), où c est la concentration de CO₂ normalisée donnée par la diffusion 3D séparable depuis les six faces (coefficient D).
+- Modèle (réaction-diffusion couplée) : le CO₂ diffuse depuis les six faces avec un D_e **fixé** (littérature : 2·10⁻⁷ à 7·10⁻⁷ m²/s, option `--de`) et est consommé par la réaction. Degré de carbonatation α (cinétique d'ordre 1, constante k), retrait ε = −a·α^n, capacité de fixation N (mol CO₂/m³). Résolution 1D en demi-dalle puis combinaison 3D approchée α = 1 − Π(1 − α_i).
+- Seul le rapport N/D_e est identifiable : N est proportionnel à D_e (D_e = 3,7·10⁻⁷ → N ≈ 23 300 ; 2·10⁻⁷ → 12 600 ; 7·10⁻⁷ → 44 000 mol/m³). Une mesure de N (ATG) fixe donc D_e.
 - La déformation mesurée est la somme du retrait de la matrice et de l'ouverture de fissures (≥ 0). On ajuste l'enveloppe basse, avec un poids de 0,1 sur les résidus où la mesure est au-dessus du modèle (fissures).
 - Les segments C12 s6 à s12 sont exclus. Les points hors du cube sont ignorés.
-- Résultat sur C12 : D ≈ 9,7·10⁻¹² m²/s, k ≈ 0,039 j⁻¹, a ≈ 5830 µε, n ≈ 0,51. Les mêmes paramètres appliqués à C34 donnent un écart du même ordre (RMSE sous l'enveloppe : 914 µε contre 1008 µε pour C12).
-- Limites : seul D est robuste face au choix du poids asymétrique, et a, n, k en dépendent. Les creux à −8000 µε près des faces et les pics de fissuration ne sont pas modélisés.
+- Résultat sur C12 : k ≈ 0,039 j⁻¹, a ≈ 5980 µε, n ≈ 1,07. Validation sur C34 avec les mêmes paramètres : RMSE sous l'enveloppe 956 µε (1048 µε sur C12).
+- Limites : les creux à −8000 µε près des faces et les pics de fissuration ne sont pas modélisés ; la combinaison 3D est approchée.
