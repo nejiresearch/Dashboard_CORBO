@@ -56,20 +56,19 @@ Observations (microdéformations médianes, essai de 113 jours) :
 
 | Zone (segments Z s1 et s3) | C12 | C34 (s3) |
 |---|---|---|
-| Z ≈ 5-25 mm | −5100 à −5500 µε | −4700 µε |
+| Z ≈ 5-25 mm (haut) | −5100 à −5500 µε | −4700 µε |
 | Z ≈ 40-60 mm (cœur) | −1200 µε | −1100 µε |
-| Z ≈ 75-95 mm | −600 à −1800 µε | −3600 µε |
+| Z ≈ 75-95 mm (fond) | −600 à −1800 µε | −3600 µε |
 
-- Dans C12, un côté du cube (Z faible) se contracte jusqu'à environ −6000 µε, tandis que l'autre (Z fort) se contracte très peu.
-- Dans C34, les deux extrémités se contractent de façon comparable. La moitié concernée de C12 est donc anormale, et ce n'est pas une propriété du matériau.
-- Segments de la moitié peu contractée de C12 (fibre V2, Z > 50 mm) : s4 à s12. Leur déformation finale va de +460 à −2000 µε, et plusieurs sont proches de 0 (s10, s11, s12).
-- La moitié opposée de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
+- Convention : Z = 0 correspond au **haut** du cube, donc Z = 100 mm est le **fond** (côté fond du bac).
+- Dans C12, le haut (Z faible) se contracte jusqu'à environ −6000 µε, tandis que le fond (Z fort) se contracte très peu.
+- Dans C34, le haut et le fond se contractent de façon comparable. Le fond de C12 est donc anormal, et ce n'est pas une propriété du matériau.
+- Segments de la moitié basse (fond) de C12 (fibre V2, Z > 50 mm) : s4 à s12. Leur déformation finale va de +460 à −2000 µε, et plusieurs sont proches de 0 (s10, s11, s12).
+- La moitié haute de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
 
-Hypothèse : l'accès au CO₂ est limité d'un côté du cube C12 (cube au fond d'un bac ouvert), ou le matériau consomme plus de CO₂ qu'il n'en arrive localement.
+Hypothèse (cohérente avec l'orientation) : le fond du cube C12, au fond d'un bac ouvert, a un accès limité au CO₂, ou le matériau y consomme plus de CO₂ qu'il n'en arrive localement.
 
-À vérifier avant de trancher :
-- quelle face est Z = 0 (haut ou fond du bac) ;
-- la profondeur carbonatée par face (phénolphtaléine après découpe).
+À vérifier : la profondeur carbonatée par face (phénolphtaléine après découpe), en particulier sur la face du fond.
 
 Décision proposée :
 - **À écarter** de l'analyse de carbonatation homogène : C12 s4 à s12.
