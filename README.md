@@ -126,3 +126,36 @@ python fit_retrait.py --plot fit_C12.png
 - Les segments C12 s6 à s12 sont exclus. Les points hors du cube sont ignorés.
 - Résultat sur C12 : k ≈ 0,039 j⁻¹, a ≈ 5980 µε, n ≈ 1,07. Validation sur C34 avec les mêmes paramètres : RMSE sous l'enveloppe 956 µε (1048 µε sur C12).
 - Limites : les creux à −8000 µε près des faces et les pics de fissuration ne sont pas modélisés ; la combinaison 3D est approchée.
+
+## Fissuration : démarche envisagée (à reprendre)
+
+État : réflexion et premier essai exploratoire, **pas encore de script dans le dépôt**.
+
+### Principe
+La fibre mesure la déformation moyenne sur une jauge Lg : matrice (retrait) + ouverture de fissures. Une fissure de largeur w donne ε_fiss ≈ w/Lg (+4000 µε sur 5 mm ≈ 20 µm). Le résidu r = ε_mesuré − ε_matrice(modèle couplé) est donc un indicateur de fissuration.
+
+### Trois niveaux
+1. **Indicateur de fissuration** (essai fait) : position des pics, ouverture cumulée Σw = Σ(excès)·Lg, nombre de pics, par segment et par date.
+2. **Endommagement phénoménologique** D(x,t) ∈ [0,1], piloté par la traction due au retrait gêné (σ_t ≈ E·(ε_cœur − ε_peau)/(1−ν) > f_t), qui réduit le retrait et ajoute l'ouverture. Calage de 2–3 paramètres (f_t, loi d'évolution) sur le niveau 1.
+3. **Fissuration explicite** (EF, endommagement ou zones cohésives) : en dernier, vu la densité de fissures.
+
+### Premier essai (niveau 1, tous les segments retenus)
+Résidu moins une base locale (quantile 20 % sur 30 mm), seuil 3σ avec σ ≥ 100 µε, jauge supposée Lg = 2 mm, 40 dates.
+
+Résultats exploitables :
+- Ouverture cumulée par paliers : forte entre ~10 et 40 j, puis stabilisation vers 50–60 j (cohérent avec le phasage diffusif → fissuration).
+- Fibres proches de la peau, selon X et Y (C12 s15, s16, s17 ; C34 s16, s17, s19) : ~2000–2500 µm/mm cumulé. Segments Z (s1–s3) et centraux (s4, s20–s23) : ~650 µm/mm.
+- Même classement entre C12 et C34.
+
+Limites :
+- Fraction fissurée trop élevée (50–75 %) : le seuil capte du bruit et l'erreur du modèle.
+- Date d'apparition ≈ 5 j partout : artefact, aucune conclusion sur le phasage.
+- Valeurs absolues de Σw indicatives (dépendent de Lg), certaines courbes décroissent (bruit ou relaxation ?).
+
+### À faire
+1. Estimer le bruit sur une zone ou une fibre sans fissure (donnée expérimentale) pour fixer le seuil.
+2. Détecter des pics (largeur, proéminence) plutôt qu'un simple dépassement.
+3. Utiliser toutes les dates (au lieu de 40) pour la cinétique.
+4. Corriger l'axe de position des cartes (position le long de la fibre ≠ X).
+5. Étendre au phasage (apparition près de la face ou du front), puis au niveau 2 (endommagement).
+6. Considérer les fissures obliques ou parallèles à la fibre (non vues) avec les trois directions de fibres.
