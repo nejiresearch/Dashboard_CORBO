@@ -16,6 +16,13 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 - Les segments **s1, s2, s3** sont orientés selon **z** et appartiennent à l'une des deux fibres. Les autres segments sont dans le plan XY.
 - Dans chaque moitié de cube : 3 plans de fibres XY, à **8 mm, 16 mm et 30 mm** de l'interface.
 
+### Orientation du cube dans l'enceinte
+
+- Les coordonnées des CSV suivent le repère du plan d'instrumentation et ne sont pas modifiées.
+- Dans l'enceinte, l'axe **X est vertical** (X = 0 en haut), **Z est horizontal** (gauche-droite) et Y est la profondeur. Le plan d'interface (Z = 50 mm) est donc vertical.
+- Les vues 3D du dashboard (onglets 4, 6, 9 et 10, schémas d'axes) sont tracées dans cette orientation, avec X vertical inversé (0 en haut). Le script exporté de l'onglet 6 aussi.
+- Les déformations et les distances aux faces ne changent pas : le cube est symétrique et ses six faces sont exposées.
+
 ## Fichiers
 
 | Fichier | Description |
@@ -56,21 +63,22 @@ Observations (microdéformations médianes, essai de 113 jours) :
 
 | Zone (segments Z s1 et s3) | C12 | C34 (s3) |
 |---|---|---|
-| Z ≈ 5-25 mm (haut) | −5100 à −5500 µε | −4700 µε |
+| Z ≈ 5-25 mm | −5100 à −5500 µε | −4700 µε |
 | Z ≈ 40-60 mm (cœur) | −1200 µε | −1100 µε |
-| Z ≈ 75-95 mm (fond) | −600 à −1800 µε | −3600 µε |
+| Z ≈ 75-95 mm | −600 à −1800 µε | −3600 µε |
 
-- Convention : Z = 0 correspond au **haut** du cube, donc Z = 100 mm est le **fond** (côté fond du bac).
-- Dans C12, le haut (Z faible) se contracte jusqu'à environ −6000 µε, tandis que le fond (Z fort) se contracte très peu.
-- Dans C34, le haut et le fond se contractent de façon comparable. Le fond de C12 est donc anormal, et ce n'est pas une propriété du matériau.
-- Segments de la moitié basse (fond) de C12 (fibre V2, Z > 50 mm) : s4 à s12.
+- Z est **horizontal** (voir Orientation) : l'asymétrie est gauche-droite, pas haut-bas.
+- Dans C12, le côté Z faible se contracte jusqu'à environ −6000 µε, tandis que le côté Z fort se contracte très peu.
+- Dans C34, les deux côtés se contractent de façon comparable. Le côté Z fort de C12 est donc anormal, et ce n'est pas une propriété du matériau.
+- Ce n'est pas un artefact de fibre : s1 et s3 sont sur la même fibre V2 et montrent les deux comportements.
+- Segments du côté Z fort de C12 (fibre V2, Z > 50 mm) : s4 à s12.
   - s6 à s12 (Z ≥ 84 mm) se contractent peu : de +460 à −1300 µε, et s10, s11 et s12 sont proches de 0.
   - s4 et s5 (Z = 70 mm, plan à 30 mm de l'interface) se comportent comme leurs homologues symétriques s22 et s23 (Z = 30 mm) : corrélation de 0,97 à 0,99 sur toute la durée, et −890 à −1970 µε contre −1060 à −1220 µε. Le comportement de C34 aux mêmes positions est cohérent (environ −1000 µε).
-- La moitié haute de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
+- Le côté Z faible de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
 
-Hypothèse (cohérente avec l'orientation) : le fond du cube C12, au fond d'un bac ouvert, a un accès limité au CO₂, ou le matériau y consomme plus de CO₂ qu'il n'en arrive localement.
+Cause à déterminer. L'hypothèse initiale (fond du bac peu accessible au CO₂) ne tient plus, car l'asymétrie est selon Z (horizontal). Pistes : position du cube dans le bac (proximité d'une paroi), circulation du gaz dans l'enceinte, hétérogénéité de mise en œuvre.
 
-À vérifier : la profondeur carbonatée par face (phénolphtaléine après découpe), en particulier sur la face du fond.
+À vérifier : la profondeur carbonatée par face (phénolphtaléine après découpe), pour chacune des six faces.
 
 Décision proposée :
 - **À écarter** de l'analyse de carbonatation homogène : C12 s6 à s12.
