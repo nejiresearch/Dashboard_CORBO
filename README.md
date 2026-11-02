@@ -198,6 +198,10 @@ Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAI
 
 **Suite envisagée** : autoriser des ajouts à rebours (option `ajout_arriere`, notamment zone X ≈ 10 mm), généraliser à tous les segments et cartographier Σw.
 
+### Onglet « 1️⃣1️⃣ Fissuration » du dashboard
+
+`onglet_fissuration.py` lance `fissuration_gaussiennes.py` depuis le dashboard. Deux modes : **Retrait seul** (mesure vs modèle, écart moyen et part de mesure au-dessus du retrait, pour valider le modèle) et **Retrait + fissuration**. Rien n'est calculé avant le clic sur **Lancer le calcul** : on choisit d'abord les segments et les échéances (≥ 28 j), la régularisation, le retrait (fit C12 par défaut ou ré-ajustement) et D_e. Les données allégées et chaque résultat (cube, segment, échéances, paramètres) sont mis en cache ; le temps affiché est une estimation (~1 s par segment et par échéance). Un panneau « Paramètres avancés » permet de modifier N, k, a, n (retrait) et les constantes de fissuration (σ min/max, gain d'ajout, amplitude min, distance min, mobilité des centres, nombre max, λ de lissage de σ, écart de regroupement) ; ils entrent dans la clé du cache. L'onglet utilise les CSV du dépôt (pas le fichier chargé manuellement) et fournit la figure, les groupes de gaussiennes, Σw(t) et un export CSV par segment.
+
 ### Fissuration par shear lag (`fissuration_cisaillement.py`)
 
 Variante du script gaussiennes avec le noyau physique d'une fissure, ε(x) = (w·λ/2)·exp(−λ|x−c|) (aire = w), moyenné analytiquement sur la jauge de 5 mm. Même résidu (mesure − retrait), mêmes étapes (centres issus de la dernière échéance, suivi à rebours), puis ajustement global avec wᵢ(t) non décroissant (somme cumulée d'incréments ≥ 0), λᵢ(t) lissé et centres communs. Option `--positif` : n'ajuste que la part du résidu au-dessus du retrait.
