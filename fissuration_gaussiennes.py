@@ -173,7 +173,7 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
     if regul and arriere and not fusion:
         if verbose:
             print('Suivi à rebours terminé ; ajustement global régularisé :')
-        hist = regulariser(hist, verbose=verbose); textes = {t: [] for t in echeances}
+        hist = regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=verbose); textes = {t: [] for t in echeances}
     for t in echeances:
         for g in hist[t][2]:
             lignes.append(dict(t_j=t, id=g["id"], pos_mm=g["c"], A_microdef=g["A"], sigma_mm=g["S"],

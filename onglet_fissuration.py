@@ -3,6 +3,8 @@
 Le calcul est lourd (~1 s par échéance et par segment) : rien n'est lancé avant le clic sur le bouton,
 les données allégées (F.prepare) et chaque résultat sont mis en cache.
 """
+import threading
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -10,6 +12,19 @@ import streamlit as st
 import fit_retrait as F
 import fissuration_gaussiennes as G
 
+_VERROU = threading.Lock()   # les paramètres de fissuration sont des constantes du module : un calcul à la fois
+# nom, libellé, défaut, min, max, pas
+PARAMS_FISSURATION = [
+    ("S_MIN", "σ min (mm) ≈ jauge/√12", G.S_MIN, 0.5, 5.0, 0.05),
+    ("S_MAX", "σ max (mm)", G.S_MAX, 5.0, 50.0, 1.0),
+    ("ADD_GAIN", "Gain de SSE min pour ajouter une gaussienne", G.ADD_GAIN, 0.005, 0.3, 0.005),
+    ("A_MIN", "Amplitude min d'une gaussienne ajoutée (µε)", G.A_MIN, 0.0, 5000.0, 50.0),
+    ("DIST_MIN", "Distance min entre centres à l'ajout (mm)", G.DIST_MIN, 0.5, 10.0, 0.5),
+    ("DECALAGE_MAX", "Mobilité des centres autour de l'init (± mm)", G.DECALAGE_MAX, 0.0, 10.0, 0.5),
+    ("N_MAX", "Nombre max de gaussiennes", G.N_MAX, 1, 50, 1),
+    ("LAMBDA_SIGMA", "Lissage de σ(t) (λ ; régularisation)", G.LAMBDA_SIGMA, 0.0, 5000.0, 50.0),
+]
+GROUPE_DEFAUT = G.GROUPE_MM
 SEC_PAR_ECHEANCE = 1.0   # estimation grossière du temps de calcul (régularisation globale comprise)
 
 
@@ -19,15 +34,23 @@ def _donnees(cube):
 
 
 @st.cache_data(show_spinner="Ajustement du retrait sur le cube (~10 s)…")
-def _theta(cube, de, refit):
-    return tuple(F.ajuster(F.prepare(cube), de)) if refit else tuple(G.THETA_DEFAUT)
+def _theta(cube, de, refit, manuel):
+    return tuple(F.ajuster(F.prepare(cube), de)) if refit else tuple(manuel)
 
 
 @st.cache_data(show_spinner=False)
-def _calcul(cube, segment, dates, theta, de, regul):
+def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm):
     h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
-    tab, hist = G.analyser(h, dates=np.array(dates), verbose=False, regul=regul)
-    return G.groupes(tab), hist
+    with _VERROU:
+        avant = {k: getattr(G, k) for k, _ in params}
+        try:
+            for k, v in params:
+                setattr(G, k, v)
+            tab, hist = G.analyser(h, dates=np.array(dates), verbose=False, regul=regul)
+        finally:
+            for k, v in avant.items():
+                setattr(G, k, v)
+    return G.groupes(tab, ecart_mm=groupe_mm), hist
 
 
 def _retrait_seul(cube, job, theta):
@@ -78,6 +101,24 @@ def render(cube, personnalise):
         refit = c4.checkbox("Ré-ajuster le retrait sur ce cube", value=False,
                             help="Sinon : paramètres du fit C12 (validés sur C34).")
         de = c5.number_input("D_e (m²/s)", value=float(F.DE_DEFAUT), format="%.2e")
+        with st.expander("⚙️ Paramètres avancés (retrait et fissuration)"):
+            st.markdown("**Retrait** (ignoré si « Ré-ajuster » est coché)")
+            r1, r2, r3, r4 = st.columns(4)
+            th = [r1.number_input("N", value=float(G.THETA_DEFAUT[0]), step=100.0, format="%.0f"),
+                  r2.number_input("k (1/j)", value=float(G.THETA_DEFAUT[1]), step=0.001, format="%.4f"),
+                  r3.number_input("a (µε)", value=float(G.THETA_DEFAUT[2]), step=50.0, format="%.0f"),
+                  r4.number_input("n", value=float(G.THETA_DEFAUT[3]), step=0.01, format="%.2f")]
+            vals = {}
+            if not seul:
+                st.markdown("**Fissuration**")
+                cols = st.columns(3)
+                for i, (nom, lib, d0, lo, hi, pas) in enumerate(PARAMS_FISSURATION):
+                    nombre = isinstance(d0, int)
+                    vals[nom] = cols[i % 3].number_input(lib, min_value=type(d0)(lo), max_value=type(d0)(hi),
+                                                          value=d0, step=type(d0)(pas) if nombre else float(pas),
+                                                          key=f"fiss_{nom}")
+                vals["GROUPE_MM"] = cols[2].number_input("Regroupement diffus : écart max des centres (mm)",
+                                                         min_value=1.0, max_value=30.0, value=float(GROUPE_DEFAUT), step=1.0)
         n_ech = len(t_sel)
         if seul:
             st.caption("Retrait seul : quelques secondes (+ ~10 s si ré-ajustement).")
@@ -91,12 +132,14 @@ def render(cube, personnalise):
             st.error("Choisissez au moins un segment et " + ("une échéance." if seul else "deux échéances."))
         else:
             st.session_state["fissuration_jobs"] = dict(cube=cube, segs=segs, dates=tuple(sorted(t_sel)),
-                                                       regul=regul, refit=refit, de=de, seul=seul)
+                                                       regul=regul, refit=refit, de=de, seul=seul, theta=tuple(th),
+                                                       groupe=vals.get("GROUPE_MM", GROUPE_DEFAUT),
+                                                       params=tuple((k, vals[k]) for k, *_ in PARAMS_FISSURATION if k in vals))
     job = st.session_state.get("fissuration_jobs")
     if not job or job["cube"] != cube or job["seul"] != seul:
         return
 
-    theta = _theta(cube, job["de"], job["refit"])
+    theta = _theta(cube, job["de"], job["refit"], job["theta"])
     st.write(f"Retrait : N={theta[0]:.0f}, k={theta[1]:.4f}, a={theta[2]:.0f}, n={theta[3]:.2f}")
     if seul:
         _retrait_seul(cube, job, theta)
@@ -105,7 +148,7 @@ def render(cube, personnalise):
     resultats = {}
     for k, s in enumerate(job["segs"]):
         barre.progress(k / len(job["segs"]), text=f"Segment {s} ({k + 1}/{len(job['segs'])})…")
-        resultats[s] = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"])
+        resultats[s] = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"])
     barre.empty()
 
     synth = []
