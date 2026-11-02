@@ -37,6 +37,7 @@ ADD_GAIN = 0.04       # gain relatif minimal du SSE pour ajouter une gaussienne
 MERGE_TOL = 0.03      # perte relative maximale du SSE pour accepter une fusion
 LAMBDA_SIGMA = 400.0  # µε/mm : pénalité sur la variation de σ entre deux échéances (régularisation)
 GROUPE_MM = 8.0      # mm : écart maximal entre centres d'un même groupe (regroupement a posteriori)
+SEUIL_RMSE = 2.0      # un pic n'est candidat que s'il dépasse SEUIL_RMSE × RMSE courant (0 = désactivé)
 A_MIN = 500.0         # µε : amplitude minimale d'une gaussienne ajoutée
 DIST_MIN = 2.0        # mm : distance minimale entre deux centres à l'ajout
 DECALAGE_MAX = 4.0    # mm : déplacement autorisé du centre à la première échéance
@@ -97,7 +98,7 @@ class Suivi:
         # ajouts
         while ajouts and len(C) < N_MAX:
             res = r - somme_gauss(x, C, A, S); i = int(np.argmax(res))
-            if res[i] < 2 * np.sqrt(sse / len(x)):
+            if res[i] < SEUIL_RMSE * np.sqrt(sse / len(x)):
                 break
             C2 = np.r_[C, x[i]]; A2 = np.r_[A, res[i]]; S2 = np.r_[S, 2.5]
             libres = np.r_[np.full(len(C), premier), True]
@@ -273,7 +274,9 @@ def tracer(hist, cube, segment, fichier):
     sel = list(dict.fromkeys(ts[np.argmin(abs(ts - t))] for t in np.linspace(ts[0], ts[-1], 5)))
     fig, axs = plt.subplots(2, 3, figsize=(19, 10))
     for ax, t in zip(axs.ravel(), sel):
-        x, q, G, _ = hist[t]; mf = np.interp(xf, x, q["mod"].values)
+        x, q, G, _ = hist[t]
+        o = np.argsort(x)                       # np.interp exige x croissant (certaines fibres sont parcourues à l'envers)
+        mf = np.interp(xf, x[o], q["mod"].values[o])
         ax.plot(x, q["eps"], "k", lw=1, label="mesure")
         ax.plot(x, q["mod"], "b--", lw=2, label="retrait modèle")
         total = np.zeros_like(xf)
