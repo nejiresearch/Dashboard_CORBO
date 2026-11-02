@@ -998,4 +998,5 @@ with st.expander("ℹ️ Notes méthodologiques"):
 # ------------------------------------------------------------ 11. fissuration
 with tabs[10]:
     import onglet_fissuration
-    onglet_fissuration.render({"Cube 12": "C12", "Cube 34": "C34"}[selection], uploaded is not None)
+    onglet_fissuration.render({"Cube 12": "C12", "Cube 34": "C34"}[selection], uploaded is not None,
+                              df_full, make_multi_cube, COMPOSANTE_LABEL)

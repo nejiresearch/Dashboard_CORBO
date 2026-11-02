@@ -9,6 +9,8 @@ chaque onglet du dashboard. Chaque script :
 import pandas as pd
 import inspect
 import fiber_ops
+import fit_retrait
+import fissuration_gaussiennes
 
 # ------------------------------------------------------------------ en-tête commun
 
@@ -608,3 +610,80 @@ fig2.show()
 fig = fig  # pour l'export ci-dessous
 '''
     return _build(titre, params + funcs + plot, "operation_fibres", dates_filter=dates_filter)
+
+
+# ------------------------------------------------------------------ onglet 11
+
+def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_mm) -> str:
+    """Script autonome : retrait + décomposition en gaussiennes (mêmes modules que le dashboard).
+
+    Le code de fit_retrait.py et de fissuration_gaussiennes.py est embarqué tel quel (chaînes brutes)
+    puis chargé comme deux modules ; le CSV déjà lu (df) leur est fourni à la place de data_prep.py."""
+    titre = "Fissuration : retrait + décomposition en gaussiennes"
+    lignes_params = "\n".join(f"G.{k} = {v!r}" for k, v in params)
+    src_fit = inspect.getsource(fit_retrait)
+    src_gauss = inspect.getsource(fissuration_gaussiennes)
+    for src in (src_fit, src_gauss):
+        assert "'''" not in src, "le source contient ''' : impossible à embarquer"
+    corps = f"""
+# ===================== Moteur de calcul (copie de fit_retrait.py et fissuration_gaussiennes.py) =====================
+# Les deux modules sont embarqués ci-dessous pour que ce script soit autonome ; on peut aussi les remplacer par
+# `import fit_retrait as F` / `import fissuration_gaussiennes as G` si les fichiers du dépôt sont disponibles.
+import sys, types
+import warnings
+warnings.filterwarnings("ignore")
+
+_dp = types.ModuleType("data_prep")                      # remplace data_prep.py : on réutilise le df déjà chargé
+_dp.CUBE_SIDE_M = CUBE_SIDE_M
+_dp.load_and_prepare = lambda *_: df
+sys.modules["data_prep"] = _dp
+
+_SRC_FIT = r'''{src_fit}'''
+
+_SRC_GAUSS = r'''{src_gauss}'''
+
+F = types.ModuleType("fit_retrait"); sys.modules["fit_retrait"] = F
+exec(_SRC_FIT, F.__dict__)
+G = types.ModuleType("fissuration_gaussiennes"); sys.modules["fissuration_gaussiennes"] = G
+exec(_SRC_GAUSS, G.__dict__)
+
+# ===================== Paramètres (modifiables) =====================
+CUBE = {cube!r}
+SEGMENTS = {list(segs)!r}
+DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; la 1re analysée doit être >= 28 j
+DE = {float(de)!r}                                    # D_e (m2/s)
+THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n (fit C12)
+REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n) sur le cube (~10 s)
+REGULARISATION = {bool(regul)!r}                      # ajustement global : w_i(t) croissant, sigma_i(t) lisse
+GROUPE_MM = {float(groupe_mm)!r}                      # regroupement a posteriori des gaussiennes voisines (diffus)
+{lignes_params}
+
+# ===================== Calcul =====================
+F.CSV = {{CUBE: CSV_PATH}}
+g_prep = F.prepare(CUBE, bin_mm=1)                    # données allégées (même pas que l'analyse de fissuration)
+if REAJUSTER_RETRAIT:
+    THETA = list(F.ajuster(F.prepare(CUBE), DE))
+print("retrait : N=%.0f k=%.4f a=%.0f n=%.2f" % tuple(THETA))
+
+resultats = {{}}
+for seg in SEGMENTS:
+    h = G.donnees_segment(CUBE, seg, np.array(THETA), DE, g=g_prep)
+    tab, hist = G.analyser(h, dates=np.array(DATES), verbose=False, regul=REGULARISATION)
+    resultats[seg] = (G.groupes(tab, ecart_mm=GROUPE_MM), hist)
+    fin = tab[tab.t_j == tab.t_j.max()]
+    print(f"{{seg}} : {{fin['id'].nunique()}} gaussiennes, Σw final = {{fin['w_um'].sum():.0f}} µm")
+    # tab.to_csv(f"fissuration_{{CUBE}}_{{seg}}.csv", index=False)
+
+# ===================== Figures =====================
+for seg, (tab, hist) in resultats.items():
+    t_aff = max(hist)                                 # échéance affichée (à changer si besoin)
+    fig = apply_publication_style(G.figure_profil(hist, t_aff, CUBE, seg),
+                                  xlabel="Position le long de la fibre (mm)", ylabel="µdef",
+                                  title=f"{{CUBE}} {{seg}} — {{t_aff:.0f}} j")
+    fig.show()
+    apply_publication_style(G.figure_ouvertures(tab, CUBE, seg), xlabel="Temps écoulé (j)",
+                            ylabel="Ouverture w (µm)", title=f"{{CUBE}} {{seg}} — ouvertures").show()
+    apply_publication_style(G.figure_suivi(tab, CUBE, seg), xlabel="Position (mm)", ylabel="Temps écoulé (j)",
+                            title=f"{{CUBE}} {{seg}} — suivi des gaussiennes").show()
+"""
+    return _build(titre, corps)
