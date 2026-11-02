@@ -179,17 +179,21 @@ Chaque gaussienne a un **centre cᵢ constant** dans le temps (une fissure ne se
 2. *Échéances précédentes (à rebours)* : centres figés, Aᵢ ≥ 0 et σᵢ réajustés. Une gaussienne non encore apparue a Aᵢ ≈ 0 : sa date d'apparition se lit sur wᵢ(t). Aucune gaussienne n'est supprimée ni fusionnée.
 3. *Fissuration diffuse a posteriori* : `groupes()` regroupe les gaussiennes dont les centres sont distants de ≤ 8 mm (`GROUPE_MM`) et donne Σw par groupe. Le « diffus » est une propriété calculée après coup, pas un résultat de l'ajustement.
 
+4. *Régularisation temporelle (option D, défaut)* : ajustement **global** de toutes les échéances en une seule fois, à partir du suivi à rebours. Paramètres : centres cᵢ communs (±4 mm autour des valeurs initiales, dans la fibre), ouvertures wᵢ(t) **non décroissantes** (somme cumulée d'incréments ≥ 0, Aᵢ = wᵢ/(σᵢ√(2π))) et σᵢ(t) lisses (pénalité λ·Δσᵢ, `LAMBDA_SIGMA` = 400). Le nombre de gaussiennes reste celui de la dernière échéance. Désactivable avec `--sans-regul`. Durée : ~30 s par segment.
+
 Options : `--avant` (ancien ordre chronologique, centres déterminés à t0) et `--fusion` (fusion de deux voisines si le SSE augmente de moins de `MERGE_TOL` = 3 %). Ces options sont déconseillées : le critère de fusion est global et le SSE total est dominé par l'erreur résiduelle, donc des pics nettement séparés (ex. s14, X ≈ 50 et 60 mm) étaient fusionnés trop facilement, et les centres déterminés à 28 j (signal faible) étaient mal placés.
 
-Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAIN`, `A_MIN`, `GROUPE_MM`, `MERGE_TOL`.
+Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAIN`, `A_MIN`, `GROUPE_MM`, `MERGE_TOL`, `LAMBDA_SIGMA`.
 
 **Résultat (C12 s14, 28 → 113 j, ordre inverse).** 11 gaussiennes suivies, centres stables à X ≈ 7, 23, 32, 42, 51, 58, 68, 81, 86 et 100 mm. Les pics voisins à X ≈ 42, 51, 58 et 68 mm restent séparés à toutes les dates. Σw ≈ 187 µm à 29 j, ≈ 233 µm à 52 j, ≈ 245 µm à 100–113 j. Dernier état : groupe central X = 51–68 mm ≈ 145 µm, pic isolé à 42 mm ≈ 54 µm. RMSE de 890 µε (29 j) à 950 µε (50 j) puis ≈ 930 µε : moins bonne aux premières dates qu'avec l'ordre chronologique (550 µε à 29 j), car le nombre de gaussiennes est fixé par la dernière échéance.
 
+**Effet de la régularisation (s14).** wᵢ(t) croît puis se stabilise, σᵢ(t) varie lentement (plus de sauts), les pics à X ≈ 42, 51 et 58 mm restent séparés (≈ 54 µm à 42 mm). Σw ≈ 154 µm à 29 j, ≈ 240 µm à 54 j, ≈ 270 µm vers 90 j puis stable. RMSE à 29 j ≈ 886 µε, équivalent à l'ordre inverse seul (890) : le gain obtenu en ne contraignant que Aᵢ (791 µε) disparaît quand on contraint wᵢ. Σw est plus élevé (≈ 270 µm) que sans régularisation (≈ 245 µm).
+
 **Limites et points ouverts**
 - Les premières dates sont moins bien ajustées (centres issus de la dernière échéance, pas d'ajout à rebours) ; une fissure absente à 113 j mais présente plus tôt ne serait pas vue. Une gaussienne peut aussi être trop large à une échéance tardive pour en représenter plusieurs plus tôt (ex. zone X ≈ 10 mm de s14 : une seule gaussienne là où deux ou trois pourraient être distinguées).
-- Rien n'impose encore wᵢ(t) non décroissant : une gaussienne peut diminuer (fermeture non physique ou compromis d'ajustement).
+- Quelques wᵢ(t) baissent encore légèrement après ~90 j malgré la contrainte (cause non investiguée).
 - Le partage de w entre gaussiennes qui se chevauchent est incertain ; seul Σw est robuste. Les pics plus étroits que la jauge ont un σ mal contraint (seule l'aire est fiable).
 - Le seuil de détection n'est pas relié à un bruit estimé : l'erreur du modèle de retrait (centaines de µε, creux près des faces non captés) domine le bruit instrumental (≈ 25–40 µε avant 1,5 j). Un bruit estimé sur les dates tardives intègre déjà la fissuration (MAD des résidus : 17 µε à 0,8 j, 130 µε à 5 j). Un test de signification par pic (w/σ_w via le jacobien) rejette alors tous les pics discrets de s14 : seule la composante diffuse (σ 5–25 mm, ≈ 230 µm) est statistiquement robuste.
 - Borner σ à la résolution ne convient pas : cela fragmente artificiellement une fissuration diffuse.
 
-**Suite envisagée** : imposer wᵢ(t) croissant, autoriser des ajouts à rebours (option `ajout_arriere`), régulariser dans le temps (pénalité sur ΔAᵢ, Δσᵢ), généraliser à tous les segments et cartographier Σw.
+**Suite envisagée** : autoriser des ajouts à rebours (option `ajout_arriere`, notamment zone X ≈ 10 mm), généraliser à tous les segments et cartographier Σw.

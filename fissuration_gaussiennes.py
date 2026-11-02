@@ -35,6 +35,7 @@ S_MIN = 1.45          # mm : écart-type minimal ≈ résolution (jauge 5 mm / �
 S_MAX = 25.0          # mm
 ADD_GAIN = 0.04       # gain relatif minimal du SSE pour ajouter une gaussienne
 MERGE_TOL = 0.03      # perte relative maximale du SSE pour accepter une fusion
+LAMBDA_SIGMA = 400.0  # µε/mm : pénalité sur la variation de σ entre deux échéances (régularisation)
 GROUPE_MM = 8.0      # mm : écart maximal entre centres d'un même groupe (regroupement a posteriori)
 A_MIN = 500.0         # µε : amplitude minimale d'une gaussienne ajoutée
 DIST_MIN = 2.0        # mm : distance minimale entre deux centres à l'ajout
@@ -145,7 +146,7 @@ def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1):
     return h
 
 
-def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False):
+def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False, regul=True):
     """Retourne (tableau long des gaussiennes, historique par échéance).
 
     arriere=True : les centres sont déterminés sur la DERNIÈRE échéance (signal le mieux résolu),
@@ -165,6 +166,10 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
         hist[t] = (x, q, [dict(g) for g in suivi.G], sse)
         textes[t] = [f"{t:6.1f} j : {len(suivi.G):2d} gaussiennes, RMSE={np.sqrt(sse / len(x)):4.0f} µε, "
                      f"Σw={sum(ouverture_um(g['A'], g['S']) for g in suivi.G):.0f} µm"] + ["          " + j for j in suivi.journal]
+    if regul and arriere and not fusion:
+        if verbose:
+            print('Suivi à rebours terminé ; ajustement global régularisé :')
+        hist = regulariser(hist, verbose=verbose); textes = {t: [] for t in echeances}
     for t in echeances:
         for g in hist[t][2]:
             lignes.append(dict(t_j=t, id=g["id"], pos_mm=g["c"], A_microdef=g["A"], sigma_mm=g["S"],
@@ -172,6 +177,74 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
         if verbose:
             print("\n".join(textes[t]))
     return pd.DataFrame(lignes), hist
+
+
+def regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=True):
+    """Ajustement GLOBAL de toutes les échéances (option D).
+
+    Paramètres : centres c_i (communs à toutes les dates, ± DECALAGE_MAX autour des valeurs initiales),
+    ouvertures w_i(t_k) = somme cumulée d'incréments >= 0 (donc w_i(t) NON DÉCROISSANT) ; A_i = w_i / (σ_i·√(2π)),
+    écarts-types σ_i(t_k) pénalisés par λ·(σ_i(t_k) − σ_i(t_{k−1})) (variation lisse).
+    Le nombre de gaussiennes est celui de la dernière échéance ; les valeurs initiales viennent du suivi à rebours.
+    """
+    from scipy.sparse import lil_matrix
+
+    ts = np.array(sorted(hist)); T = len(ts)
+    ids = [g["id"] for g in hist[ts[-1]][2]]; n = len(ids)
+    ref = {g["id"]: g for g in hist[ts[-1]][2]}
+    C0 = np.array([ref[i]["c"] for i in ids])
+    A0 = np.zeros((n, T)); S0 = np.zeros((n, T))
+    for k, t in enumerate(ts):
+        d = {g["id"]: g for g in hist[t][2]}
+        for j, i in enumerate(ids):
+            A0[j, k] = d[i]["A"] if i in d else 0.0
+            S0[j, k] = d[i]["S"] if i in d else ref[i]["S"]
+    W0 = np.maximum.accumulate(ouverture_um(A0, S0), axis=1)   # initialisation croissante (µm)
+    D0 = np.diff(np.c_[np.zeros(n), W0], axis=1)
+    xs = [hist[t][0] for t in ts]; rs = [hist[t][1]["r"].values for t in ts]
+    nd = [len(x) for x in xs]; off = np.r_[0, np.cumsum(nd)]
+    nres = off[-1] + n * (T - 1)
+
+    def deballer(q):
+        D = q[:n * T].reshape(n, T); S = q[n * T:2 * n * T].reshape(n, T); C = q[2 * n * T:]
+        return np.cumsum(D, axis=1) * 1e3 / (S * np.sqrt(2 * np.pi)), S, C   # A (µε) à partir de w (µm)
+
+    def f(q):
+        A, S, C = deballer(q); out = np.empty(nres)
+        for k in range(T):
+            out[off[k]:off[k + 1]] = somme_gauss(xs[k], C, A[:, k], S[:, k]) - rs[k]
+        out[off[-1]:] = (lam_sigma * np.diff(S, axis=1)).ravel()
+        return out
+
+    sp = lil_matrix((nres, 2 * n * T + n), dtype=int)
+    for k in range(T):
+        rows = slice(off[k], off[k + 1])
+        for i in range(n):
+            sp[rows, i * T:i * T + k + 1] = 1
+            sp[rows, n * T + i * T + k] = 1
+            sp[rows, 2 * n * T + i] = 1
+    r0 = off[-1]
+    for i in range(n):
+        for k in range(1, T):
+            sp[r0 + i * (T - 1) + k - 1, n * T + i * T + k] = 1
+            sp[r0 + i * (T - 1) + k - 1, n * T + i * T + k - 1] = 1
+    q0 = np.r_[D0.ravel(), S0.ravel(), C0]
+    lo = np.r_[np.zeros(n * T), np.full(n * T, S_MIN), np.maximum(C0 - DECALAGE_MAX, xs[0].min())]
+    hi = np.r_[np.full(n * T, 1e3), np.full(n * T, S_MAX), np.minimum(C0 + DECALAGE_MAX, xs[0].max())]
+    q0 = np.clip(q0, lo + 1e-9, hi - 1e-9)
+    sol = least_squares(f, q0, bounds=(lo, hi), jac_sparsity=sp, max_nfev=60,
+                        x_scale=np.r_[np.full(n * T, 5.0), np.full(n * T, 3.0), np.full(n, 2.0)])
+    A, S, C = deballer(sol.x)
+    nouv = {}
+    for k, t in enumerate(ts):
+        x, q, _, _ = hist[t]
+        G = [dict(id=ids[i], c=float(C[i]), A=float(A[i, k]), S=float(S[i, k])) for i in range(n)]
+        sse = float(np.sum((somme_gauss(x, C, A[:, k], S[:, k]) - q["r"].values) ** 2))
+        nouv[t] = (x, q, G, sse)
+        if verbose:
+            print(f"{t:6.1f} j : {n:2d} gaussiennes, RMSE={np.sqrt(sse / len(x)):4.0f} µε, "
+                  f"Σw={sum(ouverture_um(g['A'], g['S']) for g in G):.0f} µm")
+    return nouv
 
 
 def groupes(tab, ecart_mm=GROUPE_MM):
@@ -230,6 +303,7 @@ if __name__ == "__main__":
     ap.add_argument("--refit", action="store_true", help="ré-ajuste le retrait sur le cube (≈ 10 s)")
     ap.add_argument("--avant", action="store_true", help="ancien ordre chronologique (centres déterminés à t0)")
     ap.add_argument("--fusion", action="store_true", help="autorise la fusion (déconseillé)")
+    ap.add_argument("--sans-regul", action="store_true", help="pas d'ajustement global régularisé (option D)")
     ap.add_argument("--plot", help="figure PNG")
     ap.add_argument("--csv", help="tableau CSV (t, id, position, A, σ, w)")
     args = ap.parse_args()
@@ -240,7 +314,7 @@ if __name__ == "__main__":
         theta = F.ajuster(F.prepare(args.cube), args.de)
     print(f"retrait : N={theta[0]:.0f} k={theta[1]:.4f} a={theta[2]:.0f} n={theta[3]:.2f} (D_e={args.de:.1e})")
     h = donnees_segment(args.cube, args.segment, theta, args.de)
-    tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion)
+    tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion, regul=not args.sans_regul)
     tab = groupes(tab)
     print('\nÉtat final (groupes de gaussiennes voisines) :')
     fin = tab[tab.t_j == tab.t_j.max()]
