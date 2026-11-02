@@ -10,14 +10,12 @@ Chaque gaussienne est une fissure (ou un amas) ; son ouverture est l'aire du pic
     w_i = A_i · σ_i · √(2π) · 1e-3     (A en µε, σ en mm, w en µm)
 L'aire ne dépend pas de la jauge de l'instrument (5 mm), contrairement à A et σ.
 
-Algorithme (échéances traitées dans l'ordre chronologique, à partir de --t0)
-  1. Première échéance : ajout glouton de gaussiennes discrètes (centres libres).
-  2. Échéances suivantes : les centres sont FIGÉS, seuls A_i et σ_i sont réajustés.
-     Une gaussienne n'est jamais supprimée. On en ajoute une nouvelle si elle réduit
-     le SSE d'au moins ADD_GAIN (et A ≥ A_MIN).
-  3. Fusion : deux gaussiennes voisines sont remplacées par une seule, plus large,
-     si le SSE augmente de moins de MERGE_TOL. Le centre de la gaussienne fusionnée
-     est ensuite figé : la fissuration diffuse apparaît comme la fusion de fissures discrètes.
+Algorithme (défaut : ordre inverse, sans fusion)
+  1. Dernière échéance (signal le mieux résolu) : ajout glouton de gaussiennes, centres libres.
+  2. Échéances précédentes, à rebours : centres FIGÉS, seuls A_i >= 0 et σ_i sont réajustés.
+     Aucune gaussienne n'est supprimée ni fusionnée ; A_i ≈ 0 avant son apparition.
+  3. Le regroupement « diffus » est fait a posteriori (groupes() : centres distants de <= GROUPE_MM).
+  --avant : ancien ordre chronologique ; --fusion : fusion de voisines si le SSE augmente de < MERGE_TOL.
 
 Usage :
     python fissuration_gaussiennes.py --cube C12 --segment s14 --plot s14.png --csv s14.csv
@@ -37,6 +35,7 @@ S_MIN = 1.45          # mm : écart-type minimal ≈ résolution (jauge 5 mm / �
 S_MAX = 25.0          # mm
 ADD_GAIN = 0.04       # gain relatif minimal du SSE pour ajouter une gaussienne
 MERGE_TOL = 0.03      # perte relative maximale du SSE pour accepter une fusion
+GROUPE_MM = 8.0      # mm : écart maximal entre centres d'un même groupe (regroupement a posteriori)
 A_MIN = 500.0         # µε : amplitude minimale d'une gaussienne ajoutée
 DIST_MIN = 2.0        # mm : distance minimale entre deux centres à l'ajout
 DECALAGE_MAX = 4.0    # mm : déplacement autorisé du centre à la première échéance
@@ -85,7 +84,7 @@ class Suivi:
         self.prochain_id += 1
         return self.prochain_id - 1
 
-    def traiter(self, x, r, premier=False):
+    def traiter(self, x, r, premier=False, ajouts=True, fusion=False):
         G = self.G
         if G:
             C = np.array([g["c"] for g in G]); A = np.array([g["A"] for g in G]); S = np.array([g["S"] for g in G])
@@ -95,7 +94,7 @@ class Suivi:
         ident = [g["id"] for g in G]
 
         # ajouts
-        while len(C) < N_MAX:
+        while ajouts and len(C) < N_MAX:
             res = r - somme_gauss(x, C, A, S); i = int(np.argmax(res))
             if res[i] < 2 * np.sqrt(sse / len(x)):
                 break
@@ -109,7 +108,7 @@ class Suivi:
             ident.append(self._nouvel_id()); self.journal.append(f"+ #{ident[-1]} en X={c[-1]:.1f} mm")
 
         # fusions
-        while len(C) > 1:
+        while fusion and len(C) > 1:
             o = np.argsort(C); meilleure = None
             for k in range(len(o) - 1):
                 i, j = o[k], o[k + 1]
@@ -146,26 +145,46 @@ def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1):
     return h
 
 
-def analyser(h, t0=T0_DEFAUT, verbose=True):
-    """Retourne (tableau long des gaussiennes, historique par échéance)."""
+def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False):
+    """Retourne (tableau long des gaussiennes, historique par échéance).
+
+    arriere=True : les centres sont déterminés sur la DERNIÈRE échéance (signal le mieux résolu),
+    puis figés et suivis à rebours ; A_i(t) → 0 aux dates où la gaussienne n'est pas encore apparue.
+    fusion=False : aucune fusion pendant l'ajustement (le regroupement diffus se fait ensuite, voir groupes()).
+    """
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
-    suivi = Suivi(); lignes = []; hist = {}
-    for k, t in enumerate(echeances):
+    ordre = echeances[::-1] if arriere else echeances
+    suivi = Suivi(); lignes = []; hist = {}; textes = {}
+    for k, t in enumerate(ordre):
         q = h[h["temps_ecoule_j"] == t].sort_values("xb")
         x = q[axe].values * 1000
         suivi.journal = []
-        sse = suivi.traiter(x, q["r"].values, premier=(k == 0))
+        sse = suivi.traiter(x, q["r"].values, premier=(k == 0), ajouts=(k == 0 or not arriere or ajout_arriere),
+                            fusion=fusion)
         hist[t] = (x, q, [dict(g) for g in suivi.G], sse)
-        for g in suivi.G:
+        textes[t] = [f"{t:6.1f} j : {len(suivi.G):2d} gaussiennes, RMSE={np.sqrt(sse / len(x)):4.0f} µε, "
+                     f"Σw={sum(ouverture_um(g['A'], g['S']) for g in suivi.G):.0f} µm"] + ["          " + j for j in suivi.journal]
+    for t in echeances:
+        for g in hist[t][2]:
             lignes.append(dict(t_j=t, id=g["id"], pos_mm=g["c"], A_microdef=g["A"], sigma_mm=g["S"],
                                w_um=ouverture_um(g["A"], g["S"])))
         if verbose:
-            print(f"{t:6.1f} j : {len(suivi.G):2d} gaussiennes, RMSE={np.sqrt(sse / len(x)):4.0f} µε, "
-                  f"Σw={sum(ouverture_um(g['A'], g['S']) for g in suivi.G):.0f} µm")
-            for ligne in suivi.journal:
-                print("         ", ligne)
+            print("\n".join(textes[t]))
     return pd.DataFrame(lignes), hist
+
+
+def groupes(tab, ecart_mm=GROUPE_MM):
+    """Regroupe a posteriori les gaussiennes voisines (liaison simple sur les centres, écart ≤ ecart_mm).
+    Retourne le tableau avec une colonne 'groupe' (numérotée par position croissante)."""
+    cen = tab.groupby("id")["pos_mm"].first().sort_values()
+    grp = {}; g = 0; prec = None
+    for i, c in cen.items():
+        if prec is not None and c - prec > ecart_mm:
+            g += 1
+        grp[i] = g; prec = c
+    tab = tab.copy(); tab["groupe"] = tab["id"].map(grp)
+    return tab
 
 
 def tracer(hist, cube, segment, fichier):
@@ -209,6 +228,8 @@ if __name__ == "__main__":
                     help="paramètres du retrait (défaut : fit C12, D_e = 3,7e-7 m2/s)")
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT, help="D_e utilisé avec --theta (m2/s)")
     ap.add_argument("--refit", action="store_true", help="ré-ajuste le retrait sur le cube (≈ 10 s)")
+    ap.add_argument("--avant", action="store_true", help="ancien ordre chronologique (centres déterminés à t0)")
+    ap.add_argument("--fusion", action="store_true", help="autorise la fusion (déconseillé)")
     ap.add_argument("--plot", help="figure PNG")
     ap.add_argument("--csv", help="tableau CSV (t, id, position, A, σ, w)")
     args = ap.parse_args()
@@ -219,7 +240,12 @@ if __name__ == "__main__":
         theta = F.ajuster(F.prepare(args.cube), args.de)
     print(f"retrait : N={theta[0]:.0f} k={theta[1]:.4f} a={theta[2]:.0f} n={theta[3]:.2f} (D_e={args.de:.1e})")
     h = donnees_segment(args.cube, args.segment, theta, args.de)
-    tab, hist = analyser(h, args.t0)
+    tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion)
+    tab = groupes(tab)
+    print('\nÉtat final (groupes de gaussiennes voisines) :')
+    fin = tab[tab.t_j == tab.t_j.max()]
+    for gr, d in fin.groupby('groupe'):
+        print(f'  groupe {gr}: X={d.pos_mm.min():.0f}-{d.pos_mm.max():.0f} mm, {len(d)} gaussiennes, Σw={d.w_um.sum():.0f} µm')
     if args.csv:
         tab.to_csv(args.csv, index=False); print("CSV :", args.csv)
     if args.plot:

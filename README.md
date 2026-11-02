@@ -174,22 +174,22 @@ r(x,t) ≈ Σᵢ Aᵢ(t) · exp(−(x − cᵢ)² / 2σᵢ(t)²),  Aᵢ ≥ 0,  
 
 Chaque gaussienne a un **centre cᵢ constant** dans le temps (une fissure ne se déplace pas) ; seuls Aᵢ et σᵢ évoluent. Une gaussienne n'est **jamais supprimée** une fois créée.
 
-**Algorithme** (échéances traitées dans l'ordre, à partir de 28 j : avant, le modèle de retrait est jugé peu performant)
-1. *Première échéance* : ajout glouton de gaussiennes discrètes (σ ≥ 1,45 mm ≈ jauge/√12), centres libres.
-2. *Échéances suivantes* : centres figés, Aᵢ et σᵢ réajustés (moindres carrés bornés). On ajoute une gaussienne si elle réduit le SSE d'au moins 4 % (amplitude ≥ 500 µε, distance ≥ 2 mm aux autres).
-3. *Fusion discret → diffus* : deux voisines sont remplacées par une seule, plus large, si le SSE augmente de moins de 3 %. Le centre fusionné est ensuite figé. La fissuration diffuse est donc la fusion de fissures discrètes qui ne sont plus séparables.
+**Algorithme** (défaut : ordre **inverse**, sans fusion)
+1. *Dernière échéance (113 j)* : le signal est le mieux résolu. Ajout glouton de gaussiennes (σ de 1,45 à 25 mm, jauge/√12 minimum), centres libres ; on ajoute une gaussienne si elle réduit le SSE d'au moins 4 % (amplitude ≥ 500 µε, distance ≥ 2 mm aux autres).
+2. *Échéances précédentes (à rebours)* : centres figés, Aᵢ ≥ 0 et σᵢ réajustés. Une gaussienne non encore apparue a Aᵢ ≈ 0 : sa date d'apparition se lit sur wᵢ(t). Aucune gaussienne n'est supprimée ni fusionnée.
+3. *Fissuration diffuse a posteriori* : `groupes()` regroupe les gaussiennes dont les centres sont distants de ≤ 8 mm (`GROUPE_MM`) et donne Σw par groupe. Le « diffus » est une propriété calculée après coup, pas un résultat de l'ajustement.
 
-Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAIN`, `MERGE_TOL`, `A_MIN`.
+Options : `--avant` (ancien ordre chronologique, centres déterminés à t0) et `--fusion` (fusion de deux voisines si le SSE augmente de moins de `MERGE_TOL` = 3 %). Ces options sont déconseillées : le critère de fusion est global et le SSE total est dominé par l'erreur résiduelle, donc des pics nettement séparés (ex. s14, X ≈ 50 et 60 mm) étaient fusionnés trop facilement, et les centres déterminés à 28 j (signal faible) étaient mal placés.
 
-**Premier résultat (C12 s14, 28 → 113 j).** 9 à 12 gaussiennes, centres stables à X ≈ 10, 22, 31, 42, 52, 62, 68, 82 et 100 mm. Six fusions. Σw ≈ 180 µm à 29 j, ≈ 235 µm à 54 j, ≈ 245 µm à 100–113 j (du même ordre que l'ajustement diffus seul, ≈ 230 µm). RMSE de 550 µε (29 j) à 930 µε (113 j).
+Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAIN`, `A_MIN`, `GROUPE_MM`, `MERGE_TOL`.
+
+**Résultat (C12 s14, 28 → 113 j, ordre inverse).** 11 gaussiennes suivies, centres stables à X ≈ 7, 23, 32, 42, 51, 58, 68, 81, 86 et 100 mm. Les pics voisins à X ≈ 42, 51, 58 et 68 mm restent séparés à toutes les dates. Σw ≈ 187 µm à 29 j, ≈ 233 µm à 52 j, ≈ 245 µm à 100–113 j. Dernier état : groupe central X = 51–68 mm ≈ 145 µm, pic isolé à 42 mm ≈ 54 µm. RMSE de 890 µε (29 j) à 950 µε (50 j) puis ≈ 930 µε : moins bonne aux premières dates qu'avec l'ordre chronologique (550 µε à 29 j), car le nombre de gaussiennes est fixé par la dernière échéance.
 
 **Limites et points ouverts**
-- La qualité d'ajustement baisse avec le temps (centres figés, signal de plus en plus complexe).
-- Avec une tolérance de 3 %, les fusions ne donnent que σ ≈ 3–4 mm : peu de fissuration réellement « diffuse ». Un seuil plus élevé fusionnerait davantage mais dégraderait l'ajustement.
-- Des gaussiennes sont parfois ré-ajoutées près d'une fusion (re-fragmentation, ex. s14 à 51 j et 111 j).
+- Les premières dates sont moins bien ajustées (centres issus de la dernière échéance, pas d'ajout à rebours) ; une fissure absente à 113 j mais présente plus tôt ne serait pas vue. Une gaussienne peut aussi être trop large à une échéance tardive pour en représenter plusieurs plus tôt (ex. zone X ≈ 10 mm de s14 : une seule gaussienne là où deux ou trois pourraient être distinguées).
 - Rien n'impose encore wᵢ(t) non décroissant : une gaussienne peut diminuer (fermeture non physique ou compromis d'ajustement).
 - Le partage de w entre gaussiennes qui se chevauchent est incertain ; seul Σw est robuste. Les pics plus étroits que la jauge ont un σ mal contraint (seule l'aire est fiable).
 - Le seuil de détection n'est pas relié à un bruit estimé : l'erreur du modèle de retrait (centaines de µε, creux près des faces non captés) domine le bruit instrumental (≈ 25–40 µε avant 1,5 j). Un bruit estimé sur les dates tardives intègre déjà la fissuration (MAD des résidus : 17 µε à 0,8 j, 130 µε à 5 j). Un test de signification par pic (w/σ_w via le jacobien) rejette alors tous les pics discrets de s14 : seule la composante diffuse (σ 5–25 mm, ≈ 230 µm) est statistiquement robuste.
 - Borner σ à la résolution ne convient pas : cela fragmente artificiellement une fissuration diffuse.
 
-**Suite envisagée** : imposer wᵢ(t) croissant, interdire l'ajout près d'une fusion, régulariser dans le temps (pénalité sur ΔAᵢ, Δσᵢ), généraliser à tous les segments et cartographier Σw.
+**Suite envisagée** : imposer wᵢ(t) croissant, autoriser des ajouts à rebours (option `ajout_arriere`), régulariser dans le temps (pénalité sur ΔAᵢ, Δσᵢ), généraliser à tous les segments et cartographier Σw.
