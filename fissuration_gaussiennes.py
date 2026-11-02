@@ -159,7 +159,7 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
     if dates is not None:                      # sélection explicite des échéances (dashboard)
-        echeances = np.array([t for t in echeances if np.any(np.isclose(t, dates))])
+        echeances = np.array([t for t in echeances if np.any(np.isclose(t, dates, rtol=0, atol=0.01))])
     ordre = echeances[::-1] if arriere else echeances
     suivi = Suivi(); lignes = []; hist = {}; textes = {}
     for k, t in enumerate(ordre):
@@ -300,6 +300,65 @@ def tracer(hist, cube, segment, fichier):
     if fichier is None:
         return fig
     plt.savefig(fichier, dpi=70); plt.close(fig)
+
+
+def figure_profil(hist, t, cube, segment):
+    """Figure Plotly : mesure, retrait modèle, gaussiennes (appuyées sur le retrait) et somme, à l'échéance t."""
+    import plotly.express as px
+    import plotly.graph_objects as go
+    ts = np.array(sorted(hist)); t = ts[np.argmin(abs(ts - t))]
+    x, q, Gs, _ = hist[t]
+    o = np.argsort(x)                         # certaines fibres sont parcourues à l'envers
+    x, mesure, mod = x[o], q["eps"].values[o], q["mod"].values[o]
+    xf = np.linspace(x.min(), x.max(), 1000); mf = np.interp(xf, x, mod); pal = px.colors.qualitative.Plotly
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=mesure, mode="lines", line=dict(color="black", width=1.5), name="mesure"))
+    fig.add_trace(go.Scatter(x=xf, y=mf, mode="lines", line=dict(color="royalblue", dash="dash", width=2.5),
+                             name="retrait modèle"))
+    total = np.zeros_like(xf)
+    for k, g in enumerate(Gs):
+        gi = g["A"] * np.exp(-0.5 * ((xf - g["c"]) / g["S"]) ** 2); total += gi
+        col = pal[k % len(pal)]
+        fig.add_trace(go.Scatter(x=xf, y=mf, mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=xf, y=mf + gi, mode="lines", line=dict(color=col, width=1), fill="tonexty",
+                                 name=f"X={g['c']:.0f} mm : w={ouverture_um(g['A'], g['S']):.0f} µm",
+                                 hovertemplate="%{y:.0f} µε"))
+    fig.add_trace(go.Scatter(x=xf, y=mf + total, mode="lines", line=dict(color="crimson", width=2),
+                             name="retrait + gaussiennes"))
+    w = sum(ouverture_um(g["A"], g["S"]) for g in Gs)
+    fig.update_layout(title=f"{cube} {segment} — {t:.1f} j : {len(Gs)} gaussiennes, Σw = {w:.0f} µm",
+                      xaxis_title="Position le long de la fibre (mm)", yaxis_title="µdef", height=520,
+                      legend=dict(font=dict(size=9)))
+    return fig
+
+
+def figure_ouvertures(tab, cube, segment):
+    """Figure Plotly : ouverture w_i(t) de chaque gaussienne et somme Σw(t)."""
+    import plotly.express as px
+    import plotly.graph_objects as go
+    pal = px.colors.qualitative.Plotly
+    fig = go.Figure()
+    for k, (i, g) in enumerate(tab.groupby("id")):
+        g = g.sort_values("t_j")
+        fig.add_trace(go.Scatter(x=g["t_j"], y=g["w_um"], mode="lines+markers", marker=dict(size=4),
+                                 line=dict(color=pal[k % len(pal)]), name=f"X={g['pos_mm'].iloc[0]:.0f} mm"))
+    s = tab.groupby("t_j")["w_um"].sum()
+    fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", line=dict(color="black", width=3), name="Σw"))
+    fig.update_layout(title=f"{cube} {segment} — ouverture de chaque fissure et somme",
+                      xaxis_title="Temps écoulé (j)", yaxis_title="Ouverture w (µm)", height=420)
+    return fig
+
+
+def figure_suivi(tab, cube, segment):
+    """Figure Plotly : carte position × temps, taille des points ∝ ouverture."""
+    import plotly.express as px
+    d = tab.copy(); d["w_aff"] = d["w_um"].clip(lower=0.5)
+    fig = px.scatter(d, x="pos_mm", y="t_j", size="w_aff", color=d["id"].astype(str), size_max=22,
+                     hover_data={"w_um": ":.1f", "sigma_mm": ":.1f", "w_aff": False},
+                     labels={"pos_mm": "Position le long de la fibre (mm)", "t_j": "Temps écoulé (j)", "color": "gaussienne"},
+                     title=f"{cube} {segment} — suivi des gaussiennes (taille ∝ ouverture)")
+    fig.update_layout(height=420, showlegend=False)
+    return fig
 
 
 if __name__ == "__main__":
