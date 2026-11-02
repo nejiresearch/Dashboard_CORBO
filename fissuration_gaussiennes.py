@@ -136,8 +136,10 @@ class Suivi:
         return sse
 
 
-def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1):
-    g = F.prepare(cube, bin_mm=bin_mm)
+def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1, g=None):
+    """g : données déjà préparées par F.prepare (évite de relire le CSV, utile pour le dashboard)."""
+    if g is None:
+        g = F.prepare(cube, bin_mm=bin_mm)
     h = g[g["segment"] == segment].copy()
     if h.empty:
         raise SystemExit(f"segment {segment} absent (ou exclu) pour {cube}")
@@ -146,7 +148,7 @@ def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1):
     return h
 
 
-def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False, regul=True):
+def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False, regul=True, dates=None):
     """Retourne (tableau long des gaussiennes, historique par échéance).
 
     arriere=True : les centres sont déterminés sur la DERNIÈRE échéance (signal le mieux résolu),
@@ -155,6 +157,8 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
     """
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
+    if dates is not None:                      # sélection explicite des échéances (dashboard)
+        echeances = np.array([t for t in echeances if np.any(np.isclose(t, dates))])
     ordre = echeances[::-1] if arriere else echeances
     suivi = Suivi(); lignes = []; hist = {}; textes = {}
     for k, t in enumerate(ordre):
@@ -289,7 +293,10 @@ def tracer(hist, cube, segment, fichier):
     ax.set_title("Suivi des gaussiennes (taille ∝ w)"); ax.grid(alpha=.3)
     for ax in axs.ravel()[len(sel):-1]:
         ax.axis("off")
-    plt.tight_layout(); plt.savefig(fichier, dpi=70); plt.close(fig)
+    plt.tight_layout()
+    if fichier is None:
+        return fig
+    plt.savefig(fichier, dpi=70); plt.close(fig)
 
 
 if __name__ == "__main__":

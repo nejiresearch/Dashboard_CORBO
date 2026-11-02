@@ -436,7 +436,7 @@ tabs = st.tabs([
     "1️⃣ Effet direct", "2️⃣ Effet indirect", "3️⃣ Anisotropie",
     "4️⃣ Profil segment", "5️⃣ Effet de coin", "6️⃣ Carto 3D",
     "7️⃣ Symétrie Z< vs Z≥", "8️⃣ Heatmap seg×date", "9️⃣ Surface pos×temps",
-    "🔟 Opérations fibres",
+    "🔟 Opérations fibres", "1️⃣1️⃣ Fissuration",
 ])
 
 # ---------------------------------------------------------- 1. effet direct
@@ -994,3 +994,8 @@ with st.expander("ℹ️ Notes méthodologiques"):
     - Chaque onglet propose un bouton "📜 Générer le script Python (notebook)" : il télécharge un script autonome (repart du CSV brut, refait les calculs, style Plotly publication scientifique) reproduisant la figure affichée.
     - Aucun filtrage des valeurs aberrantes n'est appliqué (choix utilisateur).
     """)
+
+# ------------------------------------------------------------ 11. fissuration
+with tabs[10]:
+    import onglet_fissuration
+    onglet_fissuration.render({"Cube 12": "C12", "Cube 34": "C34"}[selection], uploaded is not None)

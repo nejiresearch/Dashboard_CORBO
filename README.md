@@ -197,3 +197,7 @@ Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAI
 - Borner σ à la résolution ne convient pas : cela fragmente artificiellement une fissuration diffuse.
 
 **Suite envisagée** : autoriser des ajouts à rebours (option `ajout_arriere`, notamment zone X ≈ 10 mm), généraliser à tous les segments et cartographier Σw.
+
+### Onglet « 1️⃣1️⃣ Fissuration » du dashboard
+
+`onglet_fissuration.py` lance `fissuration_gaussiennes.py` depuis le dashboard. Rien n'est calculé avant le clic sur **Lancer le calcul** : on choisit d'abord les segments et les échéances (≥ 28 j), la régularisation, le retrait (fit C12 par défaut ou ré-ajustement) et D_e. Les données allégées et chaque résultat (cube, segment, échéances, paramètres) sont mis en cache ; le temps affiché est une estimation (~1 s par segment et par échéance). L'onglet utilise les CSV du dépôt (pas le fichier chargé manuellement) et fournit la figure, les groupes de gaussiennes, Σw(t) et un export CSV par segment.
