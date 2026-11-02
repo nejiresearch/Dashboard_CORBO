@@ -417,7 +417,7 @@ def color_for_date(d):
 # ---------------------------------------------------------------- en-tête
 col_logo, col_title = st.columns([1, 6])
 with col_logo:
-    st.image("Logo1.png", width=160)
+    st.image("Logo1.png", width=300)
 with col_title:
     st.title("Dashboard cube B40-SF— Retrait de carbonatation, cube B40-SF")
 st.caption(
