@@ -32,6 +32,7 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 | `date_filter.py` | Sélection des dates affichées selon un ΔT minimal (linéaire, √t, ln(1+t)). |
 | `fiber_ops.py` | Opérations entre fibres (moyenne, somme, médiane, min, max, écart-type, A−B, A+B, A/B…). |
 | `script_generator.py` | Génération des scripts Python autonomes exportés (style publication). |
+| `fissuration_gaussiennes.py` | Décomposition du résidu (mesure − retrait modèle) en gaussiennes suivies dans le temps : positions, ouvertures, fusion discret → diffus. Voir « Fissuration par décomposition en gaussiennes ». |
 | `fit_retrait.py` | Fit pseudo-physique du retrait de la matrice (réaction-diffusion couplée du CO₂, ajustement de l'enveloppe basse). Voir ci-dessous. |
 | `Plan_FIB_C12_V2.toml`, `Plan_FIB_C34_V1.toml` | Plans de fibres de C12 et C34 (indice, paramètres par fibre). |
 | `data/profils_3d_C12.csv`, `data/profils_3d_C34.csv` | Données de mesure (voir ci-dessous). |
@@ -129,7 +130,7 @@ python fit_retrait.py --plot fit_C12.png
 
 ## Fissuration : démarche envisagée (à reprendre)
 
-État : réflexion et premier essai exploratoire, **pas encore de script dans le dépôt**.
+État : réflexion, premier essai exploratoire (niveau 1) puis décomposition en gaussiennes implémentée dans `fissuration_gaussiennes.py` (voir plus bas).
 
 ### Principe
 La fibre mesure la déformation moyenne sur une jauge Lg : matrice (retrait) + ouverture de fissures. Une fissure de largeur w donne ε_fiss ≈ w/Lg (+4000 µε sur 5 mm ≈ 20 µm). Le résidu r = ε_mesuré − ε_matrice(modèle couplé) est donc un indicateur de fissuration.
@@ -159,3 +160,36 @@ Limites :
 4. Corriger l'axe de position des cartes (position le long de la fibre ≠ X).
 5. Étendre au phasage (apparition près de la face ou du front), puis au niveau 2 (endommagement).
 6. Considérer les fissures obliques ou parallèles à la fibre (non vues) avec les trois directions de fibres.
+
+### Fissuration par décomposition en gaussiennes (`fissuration_gaussiennes.py`)
+
+```bash
+python fissuration_gaussiennes.py --cube C12 --segment s14 --plot s14.png --csv s14.csv
+```
+Options : `--t0` (première échéance, 28 j par défaut), `--theta N k a n` et `--de` (retrait), `--refit` (ré-ajuste le retrait sur le cube, ~10 s). Durée : ~10 s par segment.
+
+**Pourquoi des gaussiennes.** La fibre OBR moyenne la déformation sur une jauge de 5 mm : une fissure de largeur w apparaît comme un pic étalé, pas comme un point. L'**aire** du pic reste égale à l'ouverture, w = ∫ε dx, indépendamment de la jauge. On modélise donc le résidu r(x,t) = ε_mesuré − ε_retrait par
+
+r(x,t) ≈ Σᵢ Aᵢ(t) · exp(−(x − cᵢ)² / 2σᵢ(t)²),  Aᵢ ≥ 0,  wᵢ = Aᵢ·σᵢ·√(2π)  (w en µm si A en µε et σ en mm : facteur 10⁻³).
+
+Chaque gaussienne a un **centre cᵢ constant** dans le temps (une fissure ne se déplace pas) ; seuls Aᵢ et σᵢ évoluent. Une gaussienne n'est **jamais supprimée** une fois créée.
+
+**Algorithme** (échéances traitées dans l'ordre, à partir de 28 j : avant, le modèle de retrait est jugé peu performant)
+1. *Première échéance* : ajout glouton de gaussiennes discrètes (σ ≥ 1,45 mm ≈ jauge/√12), centres libres.
+2. *Échéances suivantes* : centres figés, Aᵢ et σᵢ réajustés (moindres carrés bornés). On ajoute une gaussienne si elle réduit le SSE d'au moins 4 % (amplitude ≥ 500 µε, distance ≥ 2 mm aux autres).
+3. *Fusion discret → diffus* : deux voisines sont remplacées par une seule, plus large, si le SSE augmente de moins de 3 %. Le centre fusionné est ensuite figé. La fissuration diffuse est donc la fusion de fissures discrètes qui ne sont plus séparables.
+
+Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAIN`, `MERGE_TOL`, `A_MIN`.
+
+**Premier résultat (C12 s14, 28 → 113 j).** 9 à 12 gaussiennes, centres stables à X ≈ 10, 22, 31, 42, 52, 62, 68, 82 et 100 mm. Six fusions. Σw ≈ 180 µm à 29 j, ≈ 235 µm à 54 j, ≈ 245 µm à 100–113 j (du même ordre que l'ajustement diffus seul, ≈ 230 µm). RMSE de 550 µε (29 j) à 930 µε (113 j).
+
+**Limites et points ouverts**
+- La qualité d'ajustement baisse avec le temps (centres figés, signal de plus en plus complexe).
+- Avec une tolérance de 3 %, les fusions ne donnent que σ ≈ 3–4 mm : peu de fissuration réellement « diffuse ». Un seuil plus élevé fusionnerait davantage mais dégraderait l'ajustement.
+- Des gaussiennes sont parfois ré-ajoutées près d'une fusion (re-fragmentation, ex. s14 à 51 j et 111 j).
+- Rien n'impose encore wᵢ(t) non décroissant : une gaussienne peut diminuer (fermeture non physique ou compromis d'ajustement).
+- Le partage de w entre gaussiennes qui se chevauchent est incertain ; seul Σw est robuste. Les pics plus étroits que la jauge ont un σ mal contraint (seule l'aire est fiable).
+- Le seuil de détection n'est pas relié à un bruit estimé : l'erreur du modèle de retrait (centaines de µε, creux près des faces non captés) domine le bruit instrumental (≈ 25–40 µε avant 1,5 j). Un bruit estimé sur les dates tardives intègre déjà la fissuration (MAD des résidus : 17 µε à 0,8 j, 130 µε à 5 j). Un test de signification par pic (w/σ_w via le jacobien) rejette alors tous les pics discrets de s14 : seule la composante diffuse (σ 5–25 mm, ≈ 230 µm) est statistiquement robuste.
+- Borner σ à la résolution ne convient pas : cela fragmente artificiellement une fissuration diffuse.
+
+**Suite envisagée** : imposer wᵢ(t) croissant, interdire l'ajout près d'une fusion, régulariser dans le temps (pénalité sur ΔAᵢ, Δσᵢ), généraliser à tous les segments et cartographier Σw.
