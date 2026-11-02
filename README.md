@@ -197,3 +197,12 @@ Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAI
 - Borner σ à la résolution ne convient pas : cela fragmente artificiellement une fissuration diffuse.
 
 **Suite envisagée** : autoriser des ajouts à rebours (option `ajout_arriere`, notamment zone X ≈ 10 mm), généraliser à tous les segments et cartographier Σw.
+
+### Fissuration par shear lag (`fissuration_cisaillement.py`)
+
+Variante du script gaussiennes avec le noyau physique d'une fissure, ε(x) = (w·λ/2)·exp(−λ|x−c|) (aire = w), moyenné analytiquement sur la jauge de 5 mm. Même résidu (mesure − retrait), mêmes étapes (centres issus de la dernière échéance, suivi à rebours), puis ajustement global avec wᵢ(t) non décroissant (somme cumulée d'incréments ≥ 0), λᵢ(t) lissé et centres communs. Option `--positif` : n'ajuste que la part du résidu au-dessus du retrait.
+
+```bash
+python fissuration_cisaillement.py --cube C12 --segment s14 --plot s14_sl.png --csv s14_sl.csv
+```
+Premier essai sur C12 s14 : 3 fissures seulement (X ≈ 51, 61, 67 mm), RMSE ≈ 1400–1600 µε (≈ 900 µε avec les gaussiennes), Σw ≈ 200 → 245 µm. Le noyau exponentiel ne reproduit pas les pics étroits et les plateaux du résidu ; le critère d'ajout s'arrête vite. Résultat à considérer comme exploratoire.
