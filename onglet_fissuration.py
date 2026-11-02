@@ -30,6 +30,29 @@ def _calcul(cube, segment, dates, theta, de, regul):
     return G.groupes(tab), hist
 
 
+def _retrait_seul(cube, job, theta):
+    import matplotlib.pyplot as plt
+    ts = list(job["dates"]); cm = plt.cm.viridis(np.linspace(0, 1, len(ts)))
+    lignes = []
+    for s in job["segs"]:
+        h = G.donnees_segment(cube, s, np.array(theta), job["de"], g=_donnees(cube))
+        axe = h["axe_mesure"].iloc[0]
+        fig, ax = plt.subplots(figsize=(9, 4))
+        for c, t in zip(cm, ts):
+            q = h[np.isclose(h["temps_ecoule_j"], t)].sort_values("xb")
+            if q.empty:
+                continue
+            ax.plot(q[axe] * 1000, q["eps"], color=c, lw=1, label=f"{t:.0f} j")
+            ax.plot(q[axe] * 1000, q["mod"], color=c, lw=2, ls="--")
+            lignes.append(dict(segment=s, t_j=round(t, 1), biais_moyen_ue=round(float((q["eps"] - q["mod"]).mean())),
+                               part_mesure_au_dessus=round(float((q["eps"] > q["mod"]).mean()), 2)))
+        ax.set_title(f"{cube} {s} : mesure (trait plein) et retrait modèle (tirets)")
+        ax.set_xlabel("position (mm)"); ax.set_ylabel("µε"); ax.grid(alpha=.3); ax.legend(fontsize=6, ncol=4)
+        st.pyplot(fig); plt.close(fig)
+    st.markdown("Écart mesure − retrait (le retrait est une enveloppe basse : la mesure doit être surtout au-dessus)")
+    st.dataframe(pd.DataFrame(lignes), hide_index=True)
+
+
 def render(cube, personnalise):
     st.subheader("Fissuration : décomposition du résidu (mesure − retrait) en gaussiennes")
     st.caption("Détails de la méthode : README, section « Fissuration par décomposition en gaussiennes ». "
@@ -37,39 +60,47 @@ def render(cube, personnalise):
     if personnalise:
         st.warning("Un fichier chargé manuellement est actif : cet onglet utilise les fichiers du dépôt "
                    f"(`{F.CSV[cube]}`).")
+    mode = st.radio("Calcul", ["Retrait seul (rapide)", "Retrait + fissuration"], horizontal=True,
+                    help="Le retrait seul permet de vérifier le modèle avant de lancer l'analyse de fissuration.")
+    seul = mode.startswith("Retrait seul")
     g = _donnees(cube)
     segments = sorted(g["segment"].unique(), key=lambda s: int(s[1:]))
-    dates = np.sort(g["temps_ecoule_j"].unique())
-    dates = [float(t) for t in dates if t >= G.T0_DEFAUT]
+    dates = [float(t) for t in np.sort(g["temps_ecoule_j"].unique()) if seul or t >= G.T0_DEFAUT]
 
     with st.form("form_fissuration"):
         c1, c2 = st.columns(2)
         segs = c1.multiselect("Segments", segments, default=["s14"] if "s14" in segments else segments[:1])
-        t_sel = c2.multiselect("Échéances (jours, ≥ 28 j : avant, le retrait est peu fiable)", dates,
-                               default=dates[::2] if len(dates) > 12 else dates,
+        t_sel = c2.multiselect("Échéances (jours)" if seul else "Échéances (jours, ≥ 28 j : avant, le retrait est peu fiable)",
+                               dates, default=dates[::6] if seul else (dates[::2] if len(dates) > 12 else dates),
                                format_func=lambda t: f"{t:.1f}")
         c3, c4, c5 = st.columns(3)
-        regul = c3.checkbox("Régularisation temporelle (wᵢ(t) croissant, σᵢ lisse)", value=True)
+        regul = c3.checkbox("Régularisation temporelle (wᵢ(t) croissant, σᵢ lisse)", value=True, disabled=seul)
         refit = c4.checkbox("Ré-ajuster le retrait sur ce cube", value=False,
                             help="Sinon : paramètres du fit C12 (validés sur C34).")
         de = c5.number_input("D_e (m²/s)", value=float(F.DE_DEFAUT), format="%.2e")
         n_ech = len(t_sel)
-        st.caption(f"Estimation : ≈ {int(len(segs) * max(n_ech, 1) * SEC_PAR_ECHEANCE)} s "
-                   f"({len(segs)} segment(s) × {n_ech} échéance(s)) ; les résultats déjà calculés sont réutilisés.")
+        if seul:
+            st.caption("Retrait seul : quelques secondes (+ ~10 s si ré-ajustement).")
+        else:
+            st.caption(f"Estimation : ≈ {int(len(segs) * max(n_ech, 1) * SEC_PAR_ECHEANCE)} s "
+                       f"({len(segs)} segment(s) × {n_ech} échéance(s)) ; les résultats déjà calculés sont réutilisés.")
         lancer = st.form_submit_button("▶️ Lancer le calcul", type="primary")
 
     if lancer:
-        if not segs or n_ech < 2:
-            st.error("Choisissez au moins un segment et deux échéances.")
+        if not segs or n_ech < (1 if seul else 2):
+            st.error("Choisissez au moins un segment et " + ("une échéance." if seul else "deux échéances."))
         else:
             st.session_state["fissuration_jobs"] = dict(cube=cube, segs=segs, dates=tuple(sorted(t_sel)),
-                                                       regul=regul, refit=refit, de=de)
+                                                       regul=regul, refit=refit, de=de, seul=seul)
     job = st.session_state.get("fissuration_jobs")
-    if not job or job["cube"] != cube:
+    if not job or job["cube"] != cube or job["seul"] != seul:
         return
 
     theta = _theta(cube, job["de"], job["refit"])
     st.write(f"Retrait : N={theta[0]:.0f}, k={theta[1]:.4f}, a={theta[2]:.0f}, n={theta[3]:.2f}")
+    if seul:
+        _retrait_seul(cube, job, theta)
+        return
     barre = st.progress(0.0)
     resultats = {}
     for k, s in enumerate(job["segs"]):
