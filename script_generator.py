@@ -614,7 +614,7 @@ fig = fig  # pour l'export ci-dessous
 
 # ------------------------------------------------------------------ onglet 11
 
-def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_mm) -> str:
+def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_mm, t_calage=None) -> str:
     """Script autonome : retrait + décomposition en gaussiennes (mêmes modules que le dashboard).
 
     Le code de fit_retrait.py et de fissuration_gaussiennes.py est embarqué tel quel (chaînes brutes)
@@ -650,10 +650,11 @@ exec(_SRC_GAUSS, G.__dict__)
 # ===================== Paramètres (modifiables) =====================
 CUBE = {cube!r}
 SEGMENTS = {list(segs)!r}
-DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; la 1re analysée doit être >= 28 j
+DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; le retrait est peu fiable avant ~28 j
 DE = {float(de)!r}                                    # D_e (m2/s)
 THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n (fit C12)
 REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n) sur le cube (~10 s)
+T_CALAGE = {None if t_calage is None else round(float(t_calage), 3)!r}   # échéance où les gaussiennes sont calées (None = dernière)
 REGULARISATION = {bool(regul)!r}                      # ajustement global : w_i(t) croissant, sigma_i(t) lisse
 GROUPE_MM = {float(groupe_mm)!r}                      # regroupement a posteriori des gaussiennes voisines (diffus)
 {lignes_params}
@@ -668,7 +669,7 @@ print("retrait : N=%.0f k=%.4f a=%.0f n=%.2f" % tuple(THETA))
 resultats = {{}}
 for seg in SEGMENTS:
     h = G.donnees_segment(CUBE, seg, np.array(THETA), DE, g=g_prep)
-    tab, hist = G.analyser(h, dates=np.array(DATES), verbose=False, regul=REGULARISATION)
+    tab, hist = G.analyser(h, t0=0.0, dates=np.array(DATES), verbose=False, regul=REGULARISATION, t_calage=T_CALAGE)
     resultats[seg] = (G.groupes(tab, ecart_mm=GROUPE_MM), hist)
     fin = tab[tab.t_j == tab.t_j.max()]
     print(f"{{seg}} : {{fin['id'].nunique()}} gaussiennes, Σw final = {{fin['w_um'].sum():.0f}} µm")
@@ -685,5 +686,6 @@ for seg, (tab, hist) in resultats.items():
                             ylabel="Ouverture w (µm)", title=f"{{CUBE}} {{seg}} — ouvertures").show()
     apply_publication_style(G.figure_suivi(tab, CUBE, seg), xlabel="Position (mm)", ylabel="Temps écoulé (j)",
                             title=f"{{CUBE}} {{seg}} — suivi des gaussiennes").show()
+    G.figure_surface(tab, CUBE, seg).show()           # surface 3D : temps x position x ouverture linéique
 """
     return _build(titre, corps)

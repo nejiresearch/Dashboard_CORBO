@@ -149,32 +149,43 @@ def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1, g=None):
     return h
 
 
-def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False, regul=True, dates=None):
+def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False, regul=True, dates=None, t_calage=None):
     """Retourne (tableau long des gaussiennes, historique par échéance).
 
     arriere=True : les centres sont déterminés sur la DERNIÈRE échéance (signal le mieux résolu),
     puis figés et suivis à rebours ; A_i(t) → 0 aux dates où la gaussienne n'est pas encore apparue.
     fusion=False : aucune fusion pendant l'ajustement (le regroupement diffus se fait ensuite, voir groupes()).
+    t_calage : échéance où les gaussiennes sont « calées » (ajout glouton, centres libres). Défaut : dernière échéance.
+    Le suivi va de t_calage vers les dates antérieures, puis (centres figés, sans ajout) vers les dates postérieures.
     """
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
     if dates is not None:                      # sélection explicite des échéances (dashboard)
         echeances = np.array([t for t in echeances if np.any(np.isclose(t, dates, rtol=0, atol=0.01))])
-    ordre = echeances[::-1] if arriere else echeances
-    suivi = Suivi(); lignes = []; hist = {}; textes = {}
+    t_ref = float(echeances[-1] if t_calage is None else echeances[np.argmin(np.abs(echeances - t_calage))])
+    if arriere:
+        i_ref = int(np.where(echeances == t_ref)[0][0])
+        ordre = list(echeances[:i_ref + 1][::-1]) + list(echeances[i_ref + 1:])
+    else:
+        ordre = echeances
+    suivi = Suivi(); lignes = []; hist = {}; textes = {}; etat_ref = None
     for k, t in enumerate(ordre):
+        if arriere and t > t_ref and etat_ref is not None:      # départ du suivi vers l'avant depuis t_calage
+            suivi.G = [dict(g) for g in etat_ref]; etat_ref = None
         q = h[h["temps_ecoule_j"] == t].sort_values("xb")
         x = q[axe].values * 1000
         suivi.journal = []
         sse = suivi.traiter(x, q["r"].values, premier=(k == 0), ajouts=(k == 0 or not arriere or ajout_arriere),
                             fusion=fusion)
         hist[t] = (x, q, [dict(g) for g in suivi.G], sse)
+        if t == t_ref:
+            etat_ref = [dict(g) for g in suivi.G]
         textes[t] = [f"{t:6.1f} j : {len(suivi.G):2d} gaussiennes, RMSE={np.sqrt(sse / len(x)):4.0f} µε, "
                      f"Σw={sum(ouverture_um(g['A'], g['S']) for g in suivi.G):.0f} µm"] + ["          " + j for j in suivi.journal]
     if regul and arriere and not fusion:
         if verbose:
             print('Suivi à rebours terminé ; ajustement global régularisé :')
-        hist = regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=verbose); textes = {t: [] for t in echeances}
+        hist = regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=verbose, t_ref=t_ref); textes = {t: [] for t in echeances}
     for t in echeances:
         for g in hist[t][2]:
             lignes.append(dict(t_j=t, id=g["id"], pos_mm=g["c"], A_microdef=g["A"], sigma_mm=g["S"],
@@ -184,7 +195,7 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
     return pd.DataFrame(lignes), hist
 
 
-def regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=True):
+def regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=True, t_ref=None):
     """Ajustement GLOBAL de toutes les échéances (option D).
 
     Paramètres : centres c_i (communs à toutes les dates, ± DECALAGE_MAX autour des valeurs initiales),
@@ -195,8 +206,9 @@ def regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=True):
     from scipy.sparse import lil_matrix
 
     ts = np.array(sorted(hist)); T = len(ts)
-    ids = [g["id"] for g in hist[ts[-1]][2]]; n = len(ids)
-    ref = {g["id"]: g for g in hist[ts[-1]][2]}
+    t_ref = ts[-1] if t_ref is None else t_ref
+    ids = [g["id"] for g in hist[t_ref][2]]; n = len(ids)
+    ref = {g["id"]: g for g in hist[t_ref][2]}
     C0 = np.array([ref[i]["c"] for i in ids])
     A0 = np.zeros((n, T)); S0 = np.zeros((n, T))
     for k, t in enumerate(ts):
@@ -361,10 +373,34 @@ def figure_suivi(tab, cube, segment):
     return fig
 
 
+def figure_surface(tab, cube, segment, n_x=200, n_t_max=60):
+    """Surface Plotly : X = temps, Y = position, Z = ouverture linéique des fissures (µm/mm).
+
+    Z(x, t) = Σ_i A_i(t)·exp(-(x-c_i)²/2σ_i²)·1e-3 : son intégrale sur x vaut Σ w_i(t) (µm).
+    Évaluation directe sur une grille (n_x × ≤ n_t_max), sans interpolation ni pivotage ; les dates sont sous-échantillonnées
+    au-delà de n_t_max (première et dernière conservées)."""
+    import plotly.graph_objects as go
+    ts = np.sort(tab["t_j"].unique())
+    if len(ts) > n_t_max:
+        ts = ts[np.unique(np.linspace(0, len(ts) - 1, n_t_max).round().astype(int))]
+    xs = np.linspace(max(tab["pos_mm"].min() - 15, 0), min(tab["pos_mm"].max() + 15, 100.0), n_x)
+    Z = np.zeros((len(xs), len(ts)))
+    for k, t in enumerate(ts):
+        d = tab[tab["t_j"] == t]
+        Z[:, k] = somme_gauss(xs, d["pos_mm"].values, d["A_microdef"].values, d["sigma_mm"].values) * 1e-3
+    fig = go.Figure(go.Surface(x=ts, y=xs, z=Z, colorscale="Inferno", colorbar=dict(title="µm/mm"),
+                               hovertemplate="t=%{x:.1f} j<br>X=%{y:.1f} mm<br>w'=%{z:.2f} µm/mm<extra></extra>"))
+    fig.update_layout(title=f"{cube} {segment} — ouverture linéique des fissures", height=560,
+                      scene=dict(xaxis_title="Temps écoulé (j)", yaxis_title="Position fibre (mm)",
+                                 zaxis_title="Ouverture (µm/mm)"), margin=dict(l=0, r=0, t=40, b=0))
+    return fig
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12")
     ap.add_argument("--segment", default="s14")
+    ap.add_argument("--t-calage", type=float, default=None, help="échéance de calage des gaussiennes (défaut : dernière)")
     ap.add_argument("--t0", type=float, default=T0_DEFAUT, help="première échéance analysée (jours)")
     ap.add_argument("--theta", type=float, nargs=4, metavar=("N", "k", "a", "n"),
                     help="paramètres du retrait (défaut : fit C12, D_e = 3,7e-7 m2/s)")
@@ -383,7 +419,8 @@ if __name__ == "__main__":
         theta = F.ajuster(F.prepare(args.cube), args.de)
     print(f"retrait : N={theta[0]:.0f} k={theta[1]:.4f} a={theta[2]:.0f} n={theta[3]:.2f} (D_e={args.de:.1e})")
     h = donnees_segment(args.cube, args.segment, theta, args.de)
-    tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion, regul=not args.sans_regul)
+    tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion, regul=not args.sans_regul,
+                       t_calage=args.t_calage)
     tab = groupes(tab)
     print('\nÉtat final (groupes de gaussiennes voisines) :')
     fin = tab[tab.t_j == tab.t_j.max()]

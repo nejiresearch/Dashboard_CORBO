@@ -80,7 +80,9 @@ def load_and_prepare(csv_path: str | Path) -> pd.DataFrame:
         raise ValueError(f"Colonnes manquantes dans {csv_path!r} : {sorted(missing)}")
 
     # --- dates / temps écoulé ---
-    df["date_mesure"] = df["profil"].apply(parse_date_from_profil)
+    # parsing sur les profils uniques (quelques dizaines) puis report : même résultat, ~50x plus rapide
+    dates_profils = {pr: parse_date_from_profil(pr) for pr in df["profil"].unique()}
+    df["date_mesure"] = df["profil"].map(dates_profils)
     n_nat = df["date_mesure"].isna().sum()
     if n_nat:
         warnings.warn(

@@ -285,8 +285,10 @@ def interpolate_grid(x, t, z, n_x=150, n_t=60):
 
 
 # ---------------------------------------------------------------- chargement
-@st.cache_data
+@st.cache_resource(show_spinner=False, max_entries=3)
 def get_data(file) -> pd.DataFrame:
+    # cache_resource : DataFrame partagé sans copie à chaque interaction (cache_data en recopiait ~60 Mo à chaque rerun).
+    # df_full n'est jamais modifié : tous les filtres travaillent sur des copies.
     return load_and_prepare(file)
 
 st.sidebar.title("📁 Données")
@@ -317,35 +319,49 @@ st.sidebar.caption(
 )
 
 # ---------------------------------------------------------------- filtres
-st.sidebar.title("🔎 Filtres")
-
 from date_filter import select_dates_by_spacing, MODE_LABELS
 
 dates_sorted = sorted(df_full["date_mesure"].unique())
 date_label = lambda d: f"{pd.Timestamp(d):%d/%m/%Y %Hh%M} (J+{df_full.loc[df_full.date_mesure == d, 'temps_ecoule_j'].iloc[0]:.1f})"
 
-st.sidebar.title("⏱️ Échantillonnage temporel")
-
 t_full_min = float(np.floor(df_full["temps_ecoule_j"].min()))
 t_full_max = float(np.ceil(df_full["temps_ecoule_j"].max()))
-
-t_min, t_max = st.sidebar.slider(
-    "Intervalle d'étude (jours écoulés depuis t0)",
-    min_value=t_full_min, max_value=t_full_max,
-    value=(t_full_min, t_full_max), step=0.5,
-)
-
-mode_label_choice = st.sidebar.radio("Mode d'espacement des dates", list(MODE_LABELS.values()), index=0)
-mode_key = {v: k for k, v in MODE_LABELS.items()}[mode_label_choice]
-
 delta_defaults = {"linear": ("jours", 0.0, 0.5), "diffusif": ("√jours", 0.0, 0.1), "log": ("ln(1+j)", 0.0, 0.05)}
-unite, defaut, pas = delta_defaults[mode_key]
-delta_t = st.sidebar.number_input(f"ΔT minimal entre 2 dates ({unite}) — 0 = tout garder",
-                                   min_value=0.0, value=defaut, step=pas)
-# ... (après la définition de delta_t)
+axes_dispo = sorted(df_full["axe_mesure"].unique())
+profondeurs_dispo = sorted(df_full["plan_profondeur_mm"].dropna().unique())
+segments_dispo = sorted(df_full["segment"].unique(), key=lambda s: int(s[1:]))
 
-with st.spinner("⚙️ Calcul de l'échantillonnage temporel..."):
-    dates_retenues = select_dates_by_spacing(df_full, t_min, t_max, delta_t, mode_key)
+# Tous les filtres sont dans un formulaire : rien n'est recalculé tant que « Appliquer les filtres » n'est pas cliqué.
+with st.sidebar.form("form_filtres"):
+    st.title("🔎 Filtres")
+    st.markdown("**⏱️ Échantillonnage temporel**")
+    t_min, t_max = st.slider(
+        "Intervalle d'étude (jours écoulés depuis t0)",
+        min_value=t_full_min, max_value=t_full_max,
+        value=(t_full_min, t_full_max), step=0.5,
+    )
+    mode_label_choice = st.radio("Mode d'espacement des dates", list(MODE_LABELS.values()), index=0)
+    mode_key = {v: k for k, v in MODE_LABELS.items()}[mode_label_choice]
+    delta_t = st.number_input("ΔT minimal entre 2 dates — 0 = tout garder\n(jours en linéaire, √jours en diffusif, ln(1+j) en log)",
+                              min_value=0.0, value=0.0, step=0.1)
+    st.markdown("**Sélection**")
+    sel_axes = st.multiselect("Composante mesurée", axes_dispo, default=axes_dispo,
+                              format_func=lambda a: COMPOSANTE_LABEL[a])
+    sel_prof = st.multiselect(
+        "Profondeur nominale (mm)", profondeurs_dispo, default=profondeurs_dispo)
+    inclure_axial = st.checkbox("Inclure l'axe traversant Z (s1,s2,s3)", value=True)
+    sel_segments = st.multiselect("Segments (filtrés aussi par la composante)", segments_dispo, default=segments_dispo)
+    st.markdown("**🎨 Échelle de couleur**")
+    colormap_choice = st.selectbox("Colormap (cartographies)", COLORMAPS_DISPO, index=0)
+    auto_scale = st.checkbox("Échelle automatique (recommandé)", value=True)
+    c1s, c2s = st.columns(2)
+    man_vmin = c1s.number_input("Min (µdef)", value=-200.0, step=10.0)
+    man_vmax = c2s.number_input("Max (µdef)", value=200.0, step=10.0)
+    st.caption("Min/Max : utilisés seulement si l'échelle automatique est décochée.")
+    st.form_submit_button("✅ Appliquer les filtres", type="primary", use_container_width=True)
+manual_vmin, manual_vmax = (None, None) if auto_scale else (man_vmin, man_vmax)
+
+dates_retenues = select_dates_by_spacing(df_full, t_min, t_max, delta_t, mode_key)
 
 with st.sidebar.expander("🔧 Ajuster manuellement la liste des dates retenues"):
     dates_dans_intervalle = sorted(
@@ -359,31 +375,6 @@ with st.sidebar.expander("🔧 Ajuster manuellement la liste des dates retenues"
     )
 
 st.sidebar.caption(f"📊 {len(sel_dates)} date(s) retenue(s) sur {len(dates_sorted)} disponibles au total.")
-
-axes_dispo = sorted(df_full["axe_mesure"].unique())
-sel_axes = st.sidebar.multiselect("Composante mesurée", axes_dispo, default=axes_dispo,
-                                   format_func=lambda a: COMPOSANTE_LABEL[a])
-
-profondeurs_dispo = sorted(df_full["plan_profondeur_mm"].dropna().unique())
-sel_prof = st.sidebar.multiselect(
-    "Profondeur nominale (mm) — laisser vide pour tout inclure (y compris axe traversant Z)",
-    profondeurs_dispo, default=profondeurs_dispo)
-inclure_axial = st.sidebar.checkbox("Inclure l'axe traversant Z (s1,s2,s3)", value=True)
-
-segments_dispo_pre = sorted(
-    df_full[df_full["axe_mesure"].isin(sel_axes)]["segment"].unique(),
-    key=lambda s: int(s[1:]))
-sel_segments = st.sidebar.multiselect("Segments", segments_dispo_pre, default=segments_dispo_pre)
-
-# ---------------------------------------------------------- 🎨 échelle de couleur
-st.sidebar.title("🎨 Échelle de couleur")
-colormap_choice = st.sidebar.selectbox("Colormap (cartographies)", COLORMAPS_DISPO, index=0)
-auto_scale = st.sidebar.checkbox("Échelle automatique (recommandé)", value=True)
-manual_vmin = manual_vmax = None
-if not auto_scale:
-    c1s, c2s = st.sidebar.columns(2)
-    manual_vmin = c1s.number_input("Min (µdef)", value=-200.0, step=10.0)
-    manual_vmax = c2s.number_input("Max (µdef)", value=200.0, step=10.0)
 
 # application des filtres
 mask = (
@@ -432,15 +423,21 @@ c2.metric("Dates sélectionnées", len(sel_dates))
 c3.metric("Déformation moyenne", f"{df['valeur_microdefs'].mean():.0f} µdef")
 c4.metric("Écart-type", f"{df['valeur_microdefs'].std():.0f} µdef")
 
-tabs = st.tabs([
+ONGLETS = [
     "1️⃣ Effet direct", "2️⃣ Effet indirect", "3️⃣ Anisotropie",
     "4️⃣ Profil segment", "5️⃣ Effet de coin", "6️⃣ Carto 3D",
     "7️⃣ Symétrie Z< vs Z≥", "8️⃣ Heatmap seg×date", "9️⃣ Surface pos×temps",
     "🔟 Opérations fibres", "1️⃣1️⃣ Fissuration",
-])
+]
+# Seul l'onglet choisi est calculé (st.tabs exécutait les 11 onglets à chaque interaction).
+onglet_actif = st.radio("Onglet", range(len(ONGLETS)), format_func=lambda i: ONGLETS[i], horizontal=True,
+                        key="onglet_actif", label_visibility="collapsed")
+_chargement = st.empty()
+_chargement.info("⏳ Calcul en cours…")
+
 
 # ---------------------------------------------------------- 1. effet direct
-with tabs[0]:
+if onglet_actif == 0:
     st.subheader("Déformation vs distance à la face perpendiculaire à l'axe mesuré")
     st.markdown("""
 **Post-traitement :** pour chaque point, on calcule la distance à la face du cube
@@ -477,7 +474,7 @@ récentes = courbes plus étalées/amples).
         st.code(sg.gen_direct_or_indirect("direct", dates_filter=sel_dates), language="python")
 
 # -------------------------------------------------------- 2. effet indirect
-with tabs[1]:
+if onglet_actif == 1:
     st.subheader("Déformation vs distance aux faces NON perpendiculaires à l'axe mesuré")
     st.markdown("""
 **Post-traitement :** on calcule ici `dist_face_laterale_min`, la distance minimale aux
@@ -518,7 +515,7 @@ mesurée, en l'absence de proximité de face directe, est la signature de cet ef
         st.code(sg.gen_direct_or_indirect("indirect", dates_filter=sel_dates), language="python")
 
 # ---------------------------------------------------------- 3. anisotropie
-with tabs[2]:
+if onglet_actif == 2:
     st.subheader("Anisotropie du retrait par profondeur nominale")
     st.markdown("""
 **Post-traitement :** moyenne (± écart-type) de la déformation par profondeur nominale,
@@ -600,7 +597,7 @@ graphique ci-dessus.
                                        dates_filter=sel_dates), language="python")
 
 # -------------------------------------------------------- 4. profil segment
-with tabs[3]:
+if onglet_actif == 3:
     st.subheader("Profil spatial le long d'un segment")
     st.markdown("""
 **Post-traitement :** déformation en fonction de la position sur la fibre, une courbe par
@@ -643,7 +640,7 @@ extrémité de fibre ou d'une arête du cube) ou une fissuration localisée.
         st.code(sg.gen_profil_segment(seg_choice, pos_mode4, dates_filter=sel_dates), language="python")
 
 # --------------------------------------------------------- 5. effet de coin
-with tabs[4]:
+if onglet_actif == 4:
     st.subheader("Effet de coin (cumul attaque directe + latérale)")
     st.markdown("""
 **Post-traitement :** un point est classé **"Coin"** si sa distance latérale minimale
@@ -673,7 +670,7 @@ restreinte dans les zones d'angle).
         st.code(sg.gen_effet_coin(seuil_mm, dates_filter=sel_dates), language="python")
 
 # ----------------------------------------------------------- 6. carto 3D
-with tabs[5]:
+if onglet_actif == 5:
     st.subheader("Cartographie 3D du champ de déformation")
     st.markdown("""
 **Post-traitement :** nuage 3D de tous les points mesurés, coloré par la valeur de
@@ -739,7 +736,7 @@ mesure réellement à cet endroit (indiquée en info-bulle).
             st.code(sg.gen_carto3d(), language="python")
 
 # ---------------------------------------------------------- 7. symétrie moitiés Z
-with tabs[6]:
+if onglet_actif == 6:
     st.subheader("Symétrie des deux moitiés : côté Z < 50 mm vs côté Z ≥ 50 mm")
     st.markdown("""
 **Post-traitement :** les points sont répartis en deux groupes selon leur position par
@@ -768,7 +765,7 @@ hétérogénéité de mise en œuvre du matériau.
             st.code(sg.gen_symetrie(dates_filter=sel_dates), language="python")
 
 # ---------------------------------------------------- 8. heatmap segment×date
-with tabs[7]:
+if onglet_actif == 7:
     st.subheader("Déformation moyenne par segment et par date")
     st.markdown("""
 **Post-traitement :** moyenne de la déformation par segment et par date, sous forme de
@@ -793,7 +790,7 @@ prioriser les segments à examiner en détail dans les autres onglets.
         st.code(sg.gen_heatmap_segdate(), language="python")
 
 # --------------------------------------------------- 9. surface position×temps
-with tabs[8]:
+if onglet_actif == 8:
     st.subheader("Évolution position × temps pour un segment")
     st.markdown("""
 **Post-traitement :** interpolation linéaire (`scipy.griddata`) de la déformation sur une
@@ -848,7 +845,7 @@ vite qu'une autre le long de la même fibre.
             st.code(sg.gen_surface_segment(seg_choice2, kind_arg, pos_mode9, dates_filter=sel_dates), language="python")
 
 # ------------------------------------------------------ 10. opérations fibres
-with tabs[9]:
+if onglet_actif == 9:
     st.subheader("Opérations entre fibres")
     st.markdown("""
 **Principe :** chaque fibre est ré-interpolée sur une grille commune 0 → L (selon sa propre
@@ -996,7 +993,9 @@ with st.expander("ℹ️ Notes méthodologiques"):
     """)
 
 # ------------------------------------------------------------ 11. fissuration
-with tabs[10]:
+if onglet_actif == 10:
     import onglet_fissuration
     onglet_fissuration.render({"Cube 12": "C12", "Cube 34": "C34"}[selection], uploaded is not None,
                               df_full, make_multi_cube, COMPOSANTE_LABEL)
+
+_chargement.empty()

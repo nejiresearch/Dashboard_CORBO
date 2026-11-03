@@ -34,35 +34,75 @@ SEC_PAR_ECHEANCE = 1.0   # estimation grossière du temps de calcul (régularisa
 PLANS = [8, 16, 30, None]
 
 THEORIE = r"""
-**Principe.** La déformation mesurée par la fibre est la somme du **retrait de la matrice** et de
-l'**ouverture des fissures** (≥ 0) : on modélise le retrait, puis on attribue le reste (le *résidu*) aux fissures.
+### 0. Hypothèse de départ : décomposition additive
 
-**1. Retrait de carbonatation (réaction-diffusion couplé, `fit_retrait.py`).** Le CO₂ diffuse depuis les
-6 faces (coefficient effectif $D_e$ fixé) et est consommé par la réaction. Avec $u=c/c_0$ et $\alpha$ le degré de carbonatation :
+La fibre noyée mesure, à la position $x$ (le long de la fibre) et au temps $t$, une déformation moyennée sur la **jauge OBR de 5 mm** (pas ≈ 1,01 mm) :
 
-$$D_e\,c_0\,u'' = N\,k\,u\,(1-\alpha), \qquad \frac{\partial\alpha}{\partial t} = k\,u\,(1-\alpha), \qquad
-\varepsilon_{retrait} = -a\,\alpha^{\,n}$$
+$$\varepsilon_{mes}(x,t)=\varepsilon_{retrait}(x,t)+\varepsilon_{fiss}(x,t)+\eta(x,t),\qquad \varepsilon_{fiss}\ge 0$$
 
-($N$ : capacité de fixation, $k$ : cinétique, $a$ et $n$ : loi de retrait). Le retrait est ajusté sur l'**enveloppe basse**
-des mesures (les fissures ne peuvent qu'*augmenter* la déformation).
+- $\varepsilon_{retrait}\le 0$ : contraction de la **matrice** carbonatée (décalcification des C-S-H), pilotée par la diffusion du CO₂ ;
+- $\varepsilon_{fiss}\ge 0$ : allongement local de la fibre où une **fissure** s'ouvre (le retrait empêché par le cœur non carbonaté fissure la peau). Les fissures n'ouvrent jamais la fibre « vers le bas », donc le retrait est une **enveloppe basse** de la mesure ;
+- $\eta$ : bruit instrumental (MAD court terme : 150 à 750 µε), dont l'effet domine l'erreur sur les petites fissures.
 
-**2. Résidu et gaussiennes (`fissuration_gaussiennes.py`).** Le résidu $r(x,t)=\varepsilon_{mesuré}-\varepsilon_{retrait}$ est
-décomposé en pics gaussiens positifs :
+La stratégie est donc : (1) estimer $\varepsilon_{retrait}$ ; (2) décomposer le **résidu** $r=\varepsilon_{mes}-\varepsilon_{retrait}$ en fissures.
 
-$$r(x,t)\approx\sum_i A_i(t)\,\exp\!\Big(-\frac{(x-c_i)^2}{2\sigma_i(t)^2}\Big),\qquad
-w_i = A_i\,\sigma_i\sqrt{2\pi}$$
+---
+### 1. Retrait de carbonatation (`fit_retrait.py`)
 
-La fibre moyenne la déformation sur une **jauge de 5 mm** : une fissure apparaît comme un pic étalé, mais son **aire**
-reste égale à l'ouverture $w$ (µm si $A$ en µε et $\sigma$ en mm). D'où $\sigma_{min}\approx 5/\sqrt{12}\approx1{,}45$ mm.
-Chaque gaussienne a un **centre $c_i$ constant** (une fissure ne se déplace pas) et n'est jamais supprimée.
+**Diffusion-réaction du CO₂.** Le gaz diffuse depuis les 6 faces (concentration normalisée $u=c/c_0$, $c_0=1{,}25$ mol/m³ pour 3 % de CO₂, $u=1$ sur la face) avec un coefficient effectif **$D_e$ fixé** (littérature : $2$ à $7\times10^{-7}$ m²/s ; défaut $3{,}7\times10^{-7}$). La diffusion du gaz étant rapide devant la réaction, le gaz est **quasi stationnaire** :
 
-**3. Algorithme.** (a) À la **dernière échéance** (signal le mieux résolu), ajout glouton de gaussiennes tant que le SSE baisse
-d'au moins `ADD_GAIN` ; (b) suivi **à rebours** : centres figés, $A_i$ et $\sigma_i$ réajustés ; (c) **régularisation temporelle** :
-ajustement global de toutes les dates avec $w_i(t)$ non décroissant et $\sigma_i(t)$ lisse ; (d) regroupement des
-gaussiennes voisines (fissuration **diffuse** = groupe, **discrète** = gaussienne isolée).
+$$D_e\,c_0\,\frac{\partial^2 u}{\partial x^2}=N\,k\,u\,(1-\alpha)$$
 
-**Limites.** Un retrait mal estimé est absorbé par de larges gaussiennes (σ → σ_max) ; seule la somme Σw est robuste quand
-des pics se chevauchent ; analyse conseillée à partir de 28 j.
+**Cinétique de carbonatation** (1er ordre, consommation du réactif) :
+
+$$\frac{\partial \alpha}{\partial t}=k\,u\,(1-\alpha)\;\Rightarrow\;\alpha^{t+\Delta t}=1-(1-\alpha^t)\,e^{-k\,u\,\Delta t}$$
+
+- $\alpha\in[0,1]$ : degré de carbonatation local ; $N$ (mol CO₂/m³) : capacité de fixation du CO₂ ; $k$ (1/j) : constante cinétique. À $D_e$ fixé, **seul le rapport $N/D_e$ est identifiable**.
+- Le front est résolu en **1D dans une demi-dalle** ($[0,L/2]$, $L=100$ mm, symétrie au centre) par différences finies ($\Delta x=1$ mm, $\Delta t=0{,}25$ j, système tridiagonal à chaque pas).
+- **Combinaison 3D** (cube attaqué par ses 6 faces) : $\alpha_{3D}=1-\prod_{i=1}^{3}\big(1-\alpha_{1D}(d_i)\big)$, avec $d_i$ la distance du point à la face la plus proche selon l'axe $i$ (interpolation bilinéaire en $(t,d)$).
+
+**Loi de retrait :**
+
+$$\varepsilon_{retrait}(x,t)=-a\,\alpha_{3D}(x,t)^{\,n}$$
+
+($a$ en µε : retrait à carbonatation complète ; $n$ : non-linéarité, $n\ne1$ car le retrait n'est pas proportionnel à la fraction carbonatée).
+
+**Ajustement de l'enveloppe basse** (moindres carrés asymétriques sur $(N,k,a,n)$, 3 départs) : avec $e=\varepsilon_{retrait}-\varepsilon_{mes}$,
+
+$$\min_{N,k,a,n}\sum_j \rho(e_j),\qquad \rho(e)=\begin{cases}e^2 & e\ge0\ (\text{mesure sous le modèle})\ W\,e^2 & e<0\ (\text{mesure au-dessus : fissure}),\ W=0{,}1\end{cases}$$
+
+Les points hors du cube (bouts de fibre) sont ignorés ; les segments C12 s6–s12 (peu contraints, proches de 0) sont exclus. Les paramètres du fit C12 sont **validés** sur C34.
+
+---
+### 2. Fissures : décomposition du résidu en gaussiennes (`fissuration_gaussiennes.py`)
+
+**Modèle.** À chaque échéance, $r(x,t_k)\approx\sum_i A_i(t_k)\exp\!\big(-\tfrac{(x-c_i)^2}{2\sigma_i(t_k)^2}\big)$ : une gaussienne par fissure (ou par zone fissurée), de **centre $c_i$ constant** (une fissure ne se déplace pas), d'amplitude $A_i$ (µε) et d'écart-type $\sigma_i$ (mm).
+
+**Ouverture.** La fibre transmet la déformation de la matrice sur une longueur de transfert : l'intégrale du pic est l'allongement cumulé, soit l'**ouverture** :
+
+$$w_i(t)=\int \varepsilon_{fiss}\,dx = A_i\,\sigma_i\sqrt{2\pi}\quad(\mu m\text{ si }A\text{ en µε et }\sigma\text{ en mm}\times 10^{-3}),\qquad W(t)=\sum_i w_i(t)$$
+
+**Résolution instrumentale.** Une fissure ponctuelle moyennée sur $L_g=5$ mm donne un pic d'écart-type $\ge L_g/\sqrt{12}\approx1{,}45$ mm : $\sigma_{min}$ = 1,45 mm (évite les pics « de bruit » ultra étroits). La **largeur d'un pic n'est pas une propriété de la fissure** (elle dépend de la jauge et du transfert fibre/matrice) : seule l'**aire** $w$ est physiquement interprétable. $\sigma_{max}=25$ mm.
+
+**Algorithme.**
+1. **Calage** à la date $t_{cal}$ (réglable ; par défaut la dernière échéance, la mieux résolue) : ajout **glouton** d'une gaussienne au maximum du résidu non expliqué, tant que le gain relatif de SSE $\ge$ `ADD_GAIN`, que son amplitude $\ge$ `A_MIN`, que le pic dépasse `SEUIL_RMSE`×RMSE courant, que sa distance aux autres centres $\ge$ `DIST_MIN` et que le nombre $\le$ `N_MAX`. Moindres carrés non linéaires à régions de confiance (`least_squares`, méthode TRF, bornes).
+2. **Suivi** : à partir de $t_{cal}$, vers les dates **antérieures** (à rebours) puis **postérieures**, les centres sont initialisés (mobilité $\pm$ `DECALAGE_MAX`) et les $A_i,\sigma_i$ réajustés, **sans nouvelle gaussienne** et **sans fusion**. Une gaussienne apparaît donc avec $A_i\to0$ avant sa date d'ouverture.
+3. **Régularisation temporelle globale** (option D) : toutes les dates sont ajustées **ensemble** en minimisant
+
+$$\sum_k\sum_x\Big[\sum_i A_i(t_k)e^{-\frac{(x-c_i)^2}{2\sigma_i(t_k)^2}}-r(x,t_k)\Big]^2+\lambda\sum_i\sum_k\big(\sigma_i(t_k)-\sigma_i(t_{k-1})\big)^2,\quad w_i(t_k)=\sum_{j\le k}\delta_{i,j},\ \delta_{i,j}\ge0$$
+
+   donc **$w_i(t)$ non décroissant** (une fissure ne se referme pas : irréversibilité), $\sigma_i(t)$ lisse ($\lambda$ = `LAMBDA_SIGMA`), centres communs à toutes les dates. Les amplitudes sont dérivées $A_i=w_i/(\sigma_i\sqrt{2\pi})$. Jacobienne creuse (`jac_sparsity`) pour garder un calcul rapide.
+4. **Regroupement a posteriori** : les gaussiennes dont les centres sont séparés de $\le$ `GROUPE_MM` (liaison simple) forment un **groupe** de fissuration **diffuse** (réseau de microfissures) ; une gaussienne isolée est une fissure **discrète**. C'est une propriété calculée après coup, pas un résultat de l'ajustement.
+
+**Indicateurs.** $\Sigma w$ (µm) : ouverture totale cumulée du segment (la plus robuste) ; RMSE (µε) : qualité de l'ajustement ; $w_i(t)$ : cinétique de chaque fissure ; **surface 3D** : $\varepsilon_{fiss}\cdot10^{-3}=\sum_iA_ie^{-\ldots}\ \ (\mu m/mm)$ en fonction de $(t,x)$, d'intégrale en $x$ égale à $W(t)$.
+
+---
+### 3. Limites et précautions
+- **Le résidu dépend du retrait** : un écart global du modèle (paramètre $a$ trop faible/fort, segments d'orientation Y plus hauts de ≈ 2000 µε) est absorbé par de très larges gaussiennes ($\sigma\to\sigma_{max}$) et fausse $\Sigma w$ ; avant ~28 j le retrait est peu fiable.
+- Le **calage** fixe le nombre et les positions : les fissures apparues après $t_{cal}$ ne sont pas détectées ; les fissures présentes avant et refermées/élargies (hors modèle) sont mal représentées. Caler tard donne le meilleur résolu.
+- Pics voisins chevauchants : seule la somme $\Sigma w$ est fiable, pas la répartition entre gaussiennes.
+- Le bruit (MAD court terme de 150 à 750 µε) et la moyenne sur la jauge limitent la détection des petites fissures.
+- Le modèle de retrait est homogène : pas de gradient d'humidité (séchage), ni de fluage, ni de réaction de la portlandite (gonflement léger).
 """
 
 
@@ -77,14 +117,14 @@ def _theta(cube, de, refit, manuel):
 
 
 @st.cache_data(show_spinner=False)
-def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm):
+def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage):
     h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
     with _VERROU:
         avant = {k: getattr(G, k) for k, _ in params}
         try:
             for k, v in params:
                 setattr(G, k, v)
-            tab, hist = G.analyser(h, dates=np.array(dates), verbose=False, regul=regul)
+            tab, hist = G.analyser(h, t0=0.0, dates=np.array(dates), verbose=False, regul=regul, t_calage=t_calage)
         finally:
             for k, v in avant.items():
                 setattr(G, k, v)
@@ -154,14 +194,18 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     g = _donnees(cube)
     disponibles = set(g["segment"].unique())
     seg_info = df_full.drop_duplicates("segment").set_index("segment")[["axe_mesure", "plan_profondeur_mm"]]
-    dates = [float(t) for t in np.sort(g["temps_ecoule_j"].unique()) if seul or t >= G.T0_DEFAUT]
+    dates = [float(t) for t in np.sort(g["temps_ecoule_j"].unique()) ]
 
     with st.form("form_fissuration"):
         st.markdown("**Segments** (par plan de profondeur et orientation de la fibre)")
         segs = _picker(seg_info, disponibles, comp_label, cube)
-        t_sel = st.multiselect("Échéances (jours)" if seul else "Échéances (jours, ≥ 28 j : avant, le retrait est peu fiable)",
-                               dates, default=dates[::6] if seul else (dates[::2] if len(dates) > 12 else dates),
+        t_sel = st.multiselect("Échéances (jours ; le retrait est moins fiable avant ~28 j)",
+                               dates, default=[t for t in dates[::6]] if seul else [t for t in dates if t >= G.T0_DEFAUT][::2],
                                format_func=lambda t: f"{t:.1f}")
+        t_cal_sel = st.select_slider("Date de calage des gaussiennes (j) : nombre et positions des fissures déterminés à cette date",
+                                     options=dates, value=dates[-1], format_func=lambda t: f"{t:.1f}",
+                                     disabled=seul, help="Ramenée à l'échéance sélectionnée la plus proche. Suivi vers les dates antérieures "
+                                     "(à rebours) puis postérieures (centres figés, sans nouvelle fissure).")
         c3, c4, c5 = st.columns(3)
         regul = c3.checkbox("Régularisation temporelle (wᵢ(t) croissant, σᵢ lisse)", value=True, disabled=seul)
         refit = c4.checkbox("Ré-ajuster le retrait sur ce cube", value=False,
@@ -198,8 +242,9 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
         if not segs or n_ech < (1 if seul else 2):
             st.error("Choisissez au moins un segment et " + ("une échéance." if seul else "deux échéances."))
         else:
+            t_cal = min(t_sel, key=lambda t: abs(t - t_cal_sel))
             st.session_state["fissuration_jobs"] = dict(
-                cube=cube, segs=segs, dates=tuple(sorted(t_sel)), regul=regul, refit=refit, de=de, seul=seul,
+                t_calage=float(t_cal), cube=cube, segs=segs, dates=tuple(sorted(t_sel)), regul=regul, refit=refit, de=de, seul=seul,
                 theta=tuple(th), groupe=vals.get("GROUPE_MM", GROUPE_DEFAUT),
                 params=tuple((k, vals[k]) for k, *_ in PARAMS_FISSURATION if k in vals))
     job = st.session_state.get("fissuration_jobs")
@@ -207,7 +252,8 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
         return
 
     theta = _theta(cube, job["de"], job["refit"], job["theta"])
-    st.write(f"Retrait : N={theta[0]:.0f}, k={theta[1]:.4f}, a={theta[2]:.0f}, n={theta[3]:.2f}")
+    st.write(f"Retrait : N={theta[0]:.0f}, k={theta[1]:.4f}, a={theta[2]:.0f}, n={theta[3]:.2f}"
+             + ("" if seul else f" · gaussiennes calées à {job['t_calage']:.1f} j"))
     _, col_cube, _ = st.columns([1, 1, 1])
     with col_cube:
         st.plotly_chart(make_multi_cube(df_full, tuple(job["segs"]), ()), width="stretch", key="cube_tab11")
@@ -221,7 +267,8 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     resultats = {}
     for k, s in enumerate(job["segs"]):
         barre.progress(k / len(job["segs"]), text=f"Segment {s} ({k + 1}/{len(job['segs'])})…")
-        resultats[s] = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"])
+        resultats[s] = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"],
+                                job["t_calage"])
     barre.empty()
 
     synth = []
@@ -242,6 +289,8 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
             st.plotly_chart(G.figure_profil(hist, t_aff, cube, s), width="stretch", key=f"fiss_prof_{s}")
             st.plotly_chart(G.figure_ouvertures(tab, cube, s), width="stretch", key=f"fiss_w_{s}")
             st.plotly_chart(G.figure_suivi(tab, cube, s), width="stretch", key=f"fiss_suivi_{s}")
+            if st.checkbox("Afficher la surface 3D (temps × position × ouverture)", key=f"fiss_3d_{s}"):
+                st.plotly_chart(G.figure_surface(tab, cube, s), width="stretch", key=f"fiss_surf_{s}")
             fin = tab[tab.t_j == tab.t_j.max()]
             grp = fin.groupby("groupe").agg(X_min_mm=("pos_mm", "min"), X_max_mm=("pos_mm", "max"),
                                             gaussiennes=("id", "count"), w_um=("w_um", "sum")).round(1)
@@ -252,4 +301,4 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
 
     with st.expander("📜 Script Python reproductible (notebook)"):
         st.code(sg.gen_fissuration(cube, job["segs"], job["dates"], theta, job["de"], False, job["regul"],
-                                   job["params"], job["groupe"]), language="python")
+                                   job["params"], job["groupe"], job["t_calage"]), language="python")
