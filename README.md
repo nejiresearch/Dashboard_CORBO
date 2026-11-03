@@ -220,3 +220,13 @@ Variante du script gaussiennes avec le noyau physique d'une fissure, ε(x) = (w�
 python fissuration_cisaillement.py --cube C12 --segment s14 --plot s14_sl.png --csv s14_sl.csv
 ```
 Premier essai sur C12 s14 : 3 fissures seulement (X ≈ 51, 61, 67 mm), RMSE ≈ 1400–1600 µε (≈ 900 µε avec les gaussiennes), Σw ≈ 200 → 245 µm. Le noyau exponentiel ne reproduit pas les pics étroits et les plateaux du résidu ; le critère d'ajout s'arrête vite. Résultat à considérer comme exploratoire.
+
+**Paires de fissures rapprochées et λ global.** Pour deux fissures voisines (x₁, x₂, d = x₂ − x₁), la superposition linéaire des deux noyaux donne un profil en selle de pics E₁ = β(δ₁ + δ₂e^(−βd)), E₃ = β(δ₁e^(−βd) + δ₂) et de creux E₂ = 2β√(δ₁δ₂)·e^(−βd/2) (δ = COD/2, β = λ). `extraire_paire(E1, E2, E3, d)` inverse ces trois relations : équation scalaire en β (E₂ = 2e^(−βd/2)/(1−e^(−2βd))·√((E₁−E₃e^(−βd))(E₃−E₁e^(−βd)))), puis δ₁ et δ₂ ; vérifié sur des profils synthétiques (β, δ₁, δ₂ retrouvés à 10⁻⁸ près). `estimer_beta` l'applique aux paires de pics consécutifs du résidu lissé (4 mm ≤ d ≤ 60 mm), et le script affiche β médian. L'option `--lambda-global <m⁻¹|auto> [--tol-lambda t]` impose un λ commun à toutes les fissures et dates.
+
+Essais (113 j, λ imposé de 100 à 450 m⁻¹) :
+- β par paires : 130 à 380 m⁻¹ selon la paire ; la plupart des paires ont un creux ≤ 0 (fissures séparées, pas d'information sur β). Dispersion d'un facteur ≈ 3 : β n'est pas déterminé précisément.
+- Le RMSE diminue de façon monotone quand λ augmente jusqu'à la borne 500 m⁻¹ : les pics sont limités par la jauge de 5 mm, λ n'est pas identifiable par l'ajustement.
+- Σw avec λ imposé varie de ≈ 10 % sur s14 (199 à 231 µm) et s15 (344 à 373 µm), de ≈ 20 % sur C34 s14 (256 à 318 µm) ; sur s4 elle passe de 28 à 53 µm (contre 99 µm avec λ libre et 102 µm avec les gaussiennes).
+- Le nombre de fissures croît avec λ (s14 : 2 à 5). À même λ, le RMSE reste supérieur à celui des gaussiennes (≈ 900 µε sur s14).
+
+Conclusion provisoire : la méthode donne un ordre de grandeur cohérent de Σw sur s14, s15 et C34 s14, mais λ est mal contraint ; un λ global ≈ 300 m⁻¹ (médiane des paires) est un choix raisonnable. Elle ne remplace pas les gaussiennes pour l'ajustement.
