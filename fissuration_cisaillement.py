@@ -266,10 +266,15 @@ def main():
     ap.add_argument("--lambda-global", default=None, metavar="m-1|auto",
                     help="λ commun à toutes les fissures et dates : valeur en m⁻¹, ou 'auto' (médiane des paires de pics)")
     ap.add_argument("--tol-lambda", type=float, default=0.0, help="tolérance relative autour du λ global (défaut 0 = imposé)")
+    ap.add_argument("--largeur-max", type=float, default=None, metavar="mm",
+                    help="longueur de transfert maximale 1/λ (mm) : impose λ ≥ 1/largeur (défaut : 100 mm)")
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
     warnings.filterwarnings("ignore")
     h = donnees_segment(a.cube, a.segment, a.theta, a.de)
+    if a.largeur_max:
+        global LAM_MIN
+        LAM_MIN = 1.0 / a.largeur_max
     if a.lambda_global:
         if a.lambda_global == "auto":
             ech = h[h["temps_ecoule_j"] == h["temps_ecoule_j"].max()].sort_values("xb")
