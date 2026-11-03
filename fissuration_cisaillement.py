@@ -19,7 +19,8 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import least_squares
+from scipy.optimize import brentq, least_squares
+from scipy.signal import find_peaks
 from scipy.sparse import lil_matrix
 
 import fit_retrait as F
@@ -53,6 +54,54 @@ def modele(x, C, W, L):
     for c, w, l in zip(C, W, L):
         y += noyau(x, c, w, l)
     return y
+
+
+def _creux(beta, E1, E3, d):
+    """E2 prédit par la superposition de deux fissures (E1, E3 : pics, d : distance), β en 1/mm."""
+    q = np.exp(-beta * d)
+    return 2 * np.exp(-beta * d / 2) / (1 - q ** 2) * np.sqrt(max((E1 - E3 * q) * (E3 - E1 * q), 0.0))
+
+
+def extraire_paire(E1, E2, E3, d):
+    """Inversion analytique d'une paire de fissures rapprochées (modèle shear lag, sans moyenne sur la jauge).
+
+    ε(x) = δ1·β·e^(-β|x-x1|) + δ2·β·e^(-β|x-x2|) ;  E1 = ε(x1), E3 = ε(x2), E2 = ε(x_m) = creux.
+    Équation scalaire en β :  E2 = 2e^(-βd/2)/(1-e^(-2βd))·√((E1-E3e^(-βd))(E3-E1e^(-βd))), puis
+    δ1 = (E1-E3e^(-βd))/(β(1-e^(-2βd))),  δ2 = (E3-E1e^(-βd))/(β(1-e^(-2βd))).
+    Unités : E en µε, d en mm, β en 1/mm, δ (= COD/2) en µm. Retourne (β, δ1, δ2) ou None (pas de solution :
+    creux trop haut/bas, ou pics non positifs). On prend la plus grande racine (branche décroissante)."""
+    if min(E1, E2, E3) <= 0 or E2 >= min(E1, E3) or d <= 0:
+        return None
+    b_lo = np.log(max(E1, E3) / min(E1, E3)) / d + 1e-9      # δ1, δ2 > 0
+    b = np.geomspace(b_lo, max(b_lo, 1e-3) * 1e4 + 50 / d, 800)
+    g = np.array([_creux(x, E1, E3, d) - E2 for x in b])
+    k = np.where((g[:-1] > 0) & (g[1:] <= 0))[0]
+    if len(k) == 0:
+        return None
+    beta = brentq(lambda x: _creux(x, E1, E3, d) - E2, b[k[-1]], b[k[-1] + 1])
+    q = np.exp(-beta * d); den = beta * (1 - q ** 2)
+    return beta, 1e-3 * (E1 - E3 * q) / den, 1e-3 * (E3 - E1 * q) / den
+
+
+def estimer_beta(x, r, sigma=None, d_min=4.0, d_max=60.0, verbose=False):
+    """β par paires de pics voisins du résidu (lissé sur ≈ jauge). Retourne la liste des (x1, x2, β, COD1, COD2)."""
+    sigma = bruit_mad(r) if sigma is None else sigma
+    pas = float(np.median(np.diff(x)))
+    n = max(int(round(JAUGE_MM / pas)), 1)
+    rl = np.convolve(r, np.ones(n) / n, mode="same")
+    pics, _ = find_peaks(rl, prominence=sigma)
+    out = []
+    for a, b in zip(pics[:-1], pics[1:]):
+        d = x[b] - x[a]
+        if not d_min <= d <= d_max:
+            continue
+        sol = extraire_paire(rl[a], rl[a:b + 1].min(), rl[b], d)
+        if verbose:
+            print(f"    paire X={x[a]:.0f}-{x[b]:.0f} mm : E1={rl[a]:.0f} E2={rl[a:b + 1].min():.0f} E3={rl[b]:.0f} -> "
+                  + ("pas de solution" if sol is None else f"β={1000 * sol[0]:.0f} m⁻¹, COD={2 * sol[1]:.0f}/{2 * sol[2]:.0f} µm"))
+        if sol is not None:
+            out.append((x[a], x[b], sol[0], 2 * sol[1], 2 * sol[2]))
+    return out
 
 
 def bruit_mad(r):
@@ -144,6 +193,12 @@ def global_regularise(xs, rs, C0, W0, L0, lam_lissage=LAMBDA_LISSAGE, positif=Fa
     return depaqueter(s.x)
 
 
+def fixer_lambda(lam, tolerance=0.0):
+    """λ global (1/mm) : borne tous les λ_i(t) à [λ(1-tol), λ(1+tol)] (tol = 0 : λ imposé)."""
+    global LAM_MIN, LAM_MAX, LAM_INIT
+    LAM_MIN, LAM_MAX, LAM_INIT = lam * (1 - tolerance) - 1e-9, lam * (1 + tolerance) + 1e-9, lam
+
+
 def analyser(h, t0=T0_DEFAUT, positif=False, verbose=True):
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
@@ -154,6 +209,10 @@ def analyser(h, t0=T0_DEFAUT, positif=False, verbose=True):
     if verbose:
         print(f"Bruit court terme (MAD, dernière échéance) : {bruit_mad(rs[-1]):.0f} µε")
         print(f"Détection sur {echeances[-1]:.0f} j :")
+    if verbose:
+        paires = estimer_beta(xs[-1], rs[-1], verbose=True)
+        if paires:
+            print(f"  β médian des paires : {1000 * np.median([p[2] for p in paires]):.0f} m⁻¹ ({len(paires)} paire(s))")
     C, W, L = detecter(xs[-1], rs[-1], positif, verbose)
     if len(C) == 0:
         raise SystemExit("aucune fissure détectée")
@@ -204,10 +263,23 @@ def main():
     ap.add_argument("--theta", type=float, nargs=4, metavar=("N", "k", "a", "n"), default=THETA_DEFAUT)
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT)
     ap.add_argument("--positif", action="store_true", help="n'ajuste que la part du résidu au-dessus du retrait")
+    ap.add_argument("--lambda-global", default=None, metavar="m-1|auto",
+                    help="λ commun à toutes les fissures et dates : valeur en m⁻¹, ou 'auto' (médiane des paires de pics)")
+    ap.add_argument("--tol-lambda", type=float, default=0.0, help="tolérance relative autour du λ global (défaut 0 = imposé)")
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
     warnings.filterwarnings("ignore")
     h = donnees_segment(a.cube, a.segment, a.theta, a.de)
+    if a.lambda_global:
+        if a.lambda_global == "auto":
+            ech = h[h["temps_ecoule_j"] == h["temps_ecoule_j"].max()].sort_values("xb")
+            p = estimer_beta(ech[ech["axe_mesure"].iloc[0]].values * 1000, ech["r"].values)
+            if not p:
+                raise SystemExit("aucune paire exploitable pour estimer β : donner --lambda-global en m⁻¹")
+            lam = float(np.median([q[2] for q in p]))
+        else:
+            lam = float(a.lambda_global) / 1000
+        fixer_lambda(lam, a.tol_lambda); print(f"λ global = {1000 * lam:.0f} m⁻¹ (± {100 * a.tol_lambda:.0f} %)")
     df, hist, C = analyser(h, a.t0, a.positif)
     if a.csv:
         df.to_csv(a.csv, index=False)
