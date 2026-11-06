@@ -225,7 +225,7 @@ python fissuration_cisaillement.py --cube C12 --segment s14 --plot s14_sl.png --
 
 Avec `--multi`, le complément glouton est désactivé (redondant, lent, ajoute des fissures de bord ; `--glouton` pour le réactiver). La jacobienne de l'ajustement global est calculée sur (w, a) directs puis composée avec la somme cumulée : ~5× plus rapide (s14 : ≈ 1 min au lieu de 5). Sur s15 : 9 fissures, RMSE 1134 µε, Σw 595 µm (aires 415) ; une fissure de bord à X=0 mm (w=143 µm, aires 12 µm) est suspecte (effet de bord) : `--interdites 0` pour l'exclure.
 
-`--marge-bord <mm>` (défaut 3 ; 0 = aucune) exclut les candidats et borne les centres ajustés à cette distance des extrémités de la fibre. Sur s15, la fissure large (1/λ = 10 mm, cœur 12 mm, aires ≈ 0–30 µm) reste collée à la borne (3 ou 8 mm) : ce n'est pas un simple effet de bord mais une bosse large en début de profil que le modèle ne sait pas représenter autrement ; à interpréter avec prudence.
+`--marge-bord <mm>` (défaut 0 = désactivée ; ne concerne que les fissures, jamais le fit du retrait) exclut les candidats et borne les centres ajustés à cette distance des extrémités de la fibre. Sur s15, la fissure large (1/λ = 10 mm, cœur 12 mm, aires ≈ 0–30 µm) reste collée à la borne (marge 3 ou 8 mm) : ce n'est pas un simple effet de bord mais une bosse large en début de profil que le modèle ne sait pas représenter autrement ; à interpréter avec prudence.
 
 Premier essai sur C12 s14 : 3 fissures seulement (X ≈ 51, 61, 67 mm), RMSE ≈ 1400–1600 µε (≈ 900 µε avec les gaussiennes), Σw ≈ 200 → 245 µm. Le noyau exponentiel ne reproduit pas les pics étroits et les plateaux du résidu ; le critère d'ajout s'arrête vite. Résultat à considérer comme exploratoire.
 
