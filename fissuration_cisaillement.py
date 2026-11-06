@@ -31,7 +31,8 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import brentq, least_squares
 from scipy.signal import argrelmin, find_peaks
-from scipy.sparse import lil_matrix
+from scipy.optimize._numdiff import approx_derivative
+from scipy.sparse import csr_matrix, lil_matrix
 
 _trapz = getattr(np, "trapezoid", None) or np.trapz   # NumPy ≥ 2 : trapezoid
 
@@ -56,6 +57,8 @@ FOND_MAX = 3e4                   # µε
 W_NEG = 0.3                      # poids des résidus où la mesure est SOUS le modèle (creux non modélisables)
 ADD_GAIN = 0.04                  # gain relatif minimal du SSE pour ajouter une fissure (complément glouton)
 PROM_MULTI = 1.5                 # facteur de bruit pour la détection multi-échéances
+LARGEUR_MULTI = 10.0             # mm : 1/λ max par défaut avec --multi (évite les fissures fantômes de fond)
+GLOUTON_MULTI = False            # complément glouton après --multi (lent, ajoute des fissures de bord)
 DUREE_MIN = 10.0                 # j : durée minimale d'une trajectoire de pic
 W_MIN = 5.0                      # µm : ouverture initiale minimale d'un candidat
 DIST_MIN = 2.0                   # mm : deux centres plus proches sont fusionnés (le plus faible est retiré)
@@ -204,6 +207,7 @@ def aires(x, r, centres, plancher, portee=None):
     """Méthode « aires » : ouverture (µm) = aire du profil au-dessus du plancher (constante, µε) sur le territoire de la fissure.
     Territoire : jusqu'au creux qui sépare du voisin ; aux extrémités, jusqu'au minimum du profil lissé dans la portée."""
     portee = min(PORTEE_MAX_MM / 2, 50.0) if portee is None else portee
+    o = np.argsort(x); x, r = np.asarray(x)[o], np.asarray(r)[o]      # certaines fibres sont parcourues à l'envers
     pas = float(np.median(np.diff(x)))
     rl = lisser(r, pas)
     idx = np.argsort(centres)
@@ -282,7 +286,7 @@ def candidats_multi(xs, rs, ts, facteur, duree_min, tol, interdites=(), verbose=
     return sorted(C)
 
 
-def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False, cand_ext=None):
+def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False, cand_ext=None, glouton=True):
     """Détection sur la dernière échéance, à la OBRstudio :
        1. candidats = pics du résidu lissé de proéminence ≥ prom (auto : PROM_FACTEUR × bruit), sauf positions interdites,
           plus les positions forcées ;
@@ -337,7 +341,7 @@ def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False, cand_ext
             return vide
         C, W, L, A, b, sse = ajuster_date(x, r, C, W, L, A, np.ones(len(C), bool), b)
     # complément glouton (résidu non expliqué)
-    while len(C) < N_MAX:
+    while len(C) < N_MAX and glouton:
         res = r - modele(x, C, W, L, A, b)
         resl = lisser(res, pas)
         i = int(np.argmax(resl))
@@ -385,21 +389,42 @@ def global_regularise(xs, rs, C0, W0, L0, A0, B0):
         W, L, A, C, B = depaqueter(q)
         return np.concatenate([_pond(modele(xs[k], C, W[:, k], L, A[:, k], B[k]) - rs[k]) for k in range(T)])
 
+    # jacobienne : différences finies sur les paramètres directs p = (W, L, A, C, B) (peu de couleurs, chaque W[i,k] ne
+    # touche que la date k), puis composition avec la somme cumulée q -> p
     sp = lil_matrix((off[-1], 2 * nT + 2 * n + T), dtype=int)
     for k in range(T):
         rows = slice(off[k], off[k + 1])
         for i in range(n):
-            sp[rows, i * T:i * T + k + 1] = 1
+            sp[rows, i * T + k] = 1
             sp[rows, nT + i] = 1
-            sp[rows, nT + n + i * T:nT + n + i * T + k + 1] = 1
+            sp[rows, nT + n + i * T + k] = 1
             sp[rows, 2 * nT + n + i] = 1
         sp[rows, 2 * nT + 2 * n + k] = 1
+    tri = np.tril(np.ones((T, T)))
+    M = lil_matrix((2 * nT + 2 * n + T,) * 2)
+    for i in range(n):
+        M[i * T:(i + 1) * T, i * T:(i + 1) * T] = tri
+        M[nT + n + i * T:nT + n + (i + 1) * T, nT + n + i * T:nT + n + (i + 1) * T] = tri
+    M[nT:nT + n, nT:nT + n] = np.eye(n)
+    M[2 * nT + n:, 2 * nT + n:] = np.eye(n + T)
+    M = M.tocsr()
+
+    def fp(p):
+        W = p[:nT].reshape(n, T); L = p[nT:nT + n]; A = np.minimum(p[nT + n:2 * nT + n].reshape(n, T), A_MAX)
+        C = p[2 * nT + n:2 * nT + 2 * n]; B = p[2 * nT + 2 * n:]
+        return np.concatenate([_pond(modele(xs[k], C, W[:, k], L, A[:, k], B[k]) - rs[k]) for k in range(T)])
+
+    def jac(q):
+        p = M @ q
+        Jp = approx_derivative(fp, p, rel_step=1e-6, sparsity=sp, f0=fp(p))
+        return csr_matrix(Jp) @ M
+
     q0 = np.r_[D0.ravel(), L0, DA0.ravel(), C0, B0]
     bb = FOND_MAX if FOND else 1e-6
     lo = np.r_[np.zeros(nT), np.full(n, LAM_MIN), np.zeros(nT), np.maximum(C0 - DECALAGE_MAX, xs[0].min()), np.full(T, -bb)]
     hi = np.r_[np.full(nT, PLAFOND_UM), np.full(n, LAM_MAX), np.full(nT, max(A_MAX, 1e-6)), np.minimum(C0 + DECALAGE_MAX, xs[0].max()), np.full(T, bb)]
     q0 = np.clip(q0, lo + 1e-9, hi - 1e-9)
-    s = least_squares(f, q0, bounds=(lo, hi), jac_sparsity=sp, max_nfev=60,
+    s = least_squares(f, q0, bounds=(lo, hi), jac=jac, max_nfev=60,
                       x_scale=np.r_[np.full(nT, 5.0), np.full(n, 0.05), np.full(nT, 2.0), np.full(n, 2.0), np.full(T, 500.0)])
     return depaqueter(s.x)
 
@@ -444,7 +469,7 @@ def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), v
         if verbose:
             print(f"Détection multi-échéances ({len(xs)} dates, proéminence {PROM_MULTI}×bruit, durée ≥ {duree_min:.0f} j) :")
         ext = candidats_multi(xs, rs, echeances, PROM_MULTI, duree_min, max(1.5 * pas, JAUGE_MM / 4, 3.0), interdites, verbose)
-    C, W, L, A, b = detecter(xs[-1], rs[-1], prom, forcees, interdites, verbose, ext)
+    C, W, L, A, b = detecter(xs[-1], rs[-1], prom, forcees, interdites, verbose, ext, glouton=(not multi) or GLOUTON_MULTI)
     if len(C) == 0:
         raise SystemExit("aucune fissure détectée")
     n, T = len(C), len(echeances)
@@ -499,7 +524,7 @@ def _liste(s):
 
 
 def main():
-    global PROM_MULTI, JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
+    global GLOUTON_MULTI, PROM_MULTI, JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12")
     ap.add_argument("--segment", default="s14")
@@ -514,7 +539,7 @@ def main():
     ap.add_argument("--codmin", type=float, default=None, help="ouverture minimale d'une fissure en µm")
     ap.add_argument("--plafond", type=float, default=None, help="COD maximal en mm")
     ap.add_argument("--a-max", type=float, default=None, help=f"demi-largeur max du cœur en mm (défaut {A_CUBE_MM}) ; 0 = noyau exponentiel pur")
-    ap.add_argument("--largeur-max", type=float, default=None, metavar="mm", help="longueur de transfert maximale 1/λ (mm)")
+    ap.add_argument("--largeur-max", type=float, default=None, metavar="mm", help="longueur de transfert maximale 1/λ (mm) ; défaut 10 avec --multi, sinon aucune ; 0 = aucune limite")
     ap.add_argument("--plancher", choices=["local", "zero"], default=None, help="fond initial / plancher des aires")
     ap.add_argument("--sans-fond", action="store_true", help="pas de décalage b(t) ajusté")
     ap.add_argument("--w-neg", type=float, default=None, help=f"poids des points sous le modèle (défaut {W_NEG} ; 1 = symétrique)")
@@ -525,6 +550,7 @@ def main():
     ap.add_argument("--multi", action="store_true", help="détection des centres sur toutes les échéances (trajectoires de pics)")
     ap.add_argument("--prom-multi", type=float, default=None, help=f"facteur de bruit pour la détection multi (défaut {PROM_MULTI})")
     ap.add_argument("--duree-min", type=float, default=DUREE_MIN, help="durée minimale (j) d'une trajectoire validée")
+    ap.add_argument("--glouton", action="store_true", help="avec --multi : ajoute aussi le complément glouton (lent)")
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
     warnings.filterwarnings("ignore")
@@ -536,12 +562,14 @@ def main():
         COD_MIN = a.codmin
     if a.plafond is not None:
         PLAFOND_UM = 1000 * a.plafond
+    GLOUTON_MULTI = a.glouton
     if a.prom_multi:
         PROM_MULTI = a.prom_multi
     if a.a_max is not None:
         A_MAX = a.a_max
-    if a.largeur_max:
-        LAM_MIN = max(LAM_MIN, 1.0 / a.largeur_max)
+    lmax = a.largeur_max if a.largeur_max is not None else (LARGEUR_MULTI if a.multi else 0.0)
+    if lmax:
+        LAM_MIN = max(LAM_MIN, 1.0 / lmax)
     if a.plancher:
         PLANCHER = a.plancher
     if a.sans_fond:
