@@ -20,6 +20,12 @@ La stratégie est donc : (1) estimer $\varepsilon_{retrait}$ ; (2) décomposer l
 
 $$D_e\,c_0\,\frac{\partial^2 u}{\partial x^2}=N\,k\,u\,(1-\alpha)$$
 
+**Endommagement (diffusion accélérée par la fissuration).** Le coefficient effectif devient un vecteur spatial recalculé à chaque pas de temps à partir du degré de carbonatation du pas précédent :
+
+$$D_{eff}(x,t)=D_e\,\big[1+\beta\,\max(0,\alpha-\alpha_{crit})^{m}\big]$$
+
+où $\beta$ est l'intensité du dommage, $\alpha_{crit}$ le seuil au-delà duquel les fissures apparaissent et $m$ (fixé à 2) l'exposant de sensibilité ; $D_e$ est remplacé par $D_{eff}$ dans le terme de réaction/diffusion $\lambda=N k(1-\alpha)/(D_{eff}c_0)$. $\beta=0$ : diffusion constante. Les valeurs par défaut des scripts sont $\beta=0$ (le dommage n'améliore pas l'ajustement actuel).
+
 **Cinétique de carbonatation** (1er ordre, consommation du réactif) :
 
 $$\frac{\partial \alpha}{\partial t}=k\,u\,(1-\alpha)\;\Rightarrow\;\alpha^{t+\Delta t}=1-(1-\alpha^t)\,e^{-k\,u\,\Delta t}$$
@@ -34,7 +40,7 @@ $$\varepsilon_{retrait}(x,t)=-a\,\alpha_{3D}(x,t)^{\,n}$$
 
 ($a$ en µε : retrait à carbonatation complète ; $n$ : non-linéarité, $n\ne1$ car le retrait n'est pas proportionnel à la fraction carbonatée).
 
-**Ajustement de l'enveloppe basse** (moindres carrés asymétriques sur $(N,k,a,n)$, 3 départs) : avec $e=\varepsilon_{retrait}-\varepsilon_{mes}$,
+**Ajustement de l'enveloppe basse** (moindres carrés asymétriques sur $(N,k,a,n,\beta,\alpha_{crit})$, 3 départs ; $N,k,\beta,\alpha_{crit}$ optimisés en espace logarithmique) : avec $e=\varepsilon_{retrait}-\varepsilon_{mes}$,
 
 $$\min_{N,k,a,n}\sum_j \rho(e_j),\qquad \rho(e)=\begin{cases}e^2 & e\ge0\ (\text{mesure sous le modèle})\\ W\,e^2 & e<0\ (\text{mesure au-dessus : fissure}),\ W=0{,}1\end{cases}$$
 
@@ -64,7 +70,7 @@ $$\sum_k\sum_x\Big[\sum_i A_i(t_k)e^{-\frac{(x-c_i)^2}{2\sigma_i(t_k)^2}}-r(x,t_
    donc **$w_i(t)$ non décroissant** (une fissure ne se referme pas : irréversibilité), $\sigma_i(t)$ lisse ($\lambda$ = `LAMBDA_SIGMA`), centres communs à toutes les dates. Les amplitudes sont dérivées $A_i=w_i/(\sigma_i\sqrt{2\pi})$. Jacobienne creuse (`jac_sparsity`) pour garder un calcul rapide.
 4. **Regroupement a posteriori** : les gaussiennes dont les centres sont séparés de $\le$ `GROUPE_MM` (liaison simple) forment un **groupe** de fissuration **diffuse** (réseau de microfissures) ; une gaussienne isolée est une fissure **discrète**. C'est une propriété calculée après coup, pas un résultat de l'ajustement.
 
-**Indicateurs.** $\Sigma w$ (µm) : ouverture totale cumulée du segment (la plus robuste) ; RMSE (µε) ; $w_i(t)$ : cinétique de chaque fissure ; **surface 3D** : $\varepsilon_{fiss}\cdot10^{-3}=\sum_iA_ie^{-\ldots}\ \ (\mu m/mm)$ en fonction de $(t,x)$, d'intégrale en $x$ égale à $W(t)$.
+**Indicateurs.** $\Sigma w$ (µm) : ouverture totale cumulée du segment (la plus robuste) ; RMSE (µε) ; $w_i(t)$ : cinétique de chaque fissure ; **figure 3D** : ouverture $w_i(t)$ (µm) de chaque fissure à sa position $c_i$ en fonction du temps (une courbe par fissure, même couleur que le suivi et les ouvertures) ; une déformation (µm/mm) n'est pas une ouverture.
 
 **Forces / faiblesses.** + Très bon ajustement (RMSE le plus bas), souple, rapide à calibrer. − Pas de physique du transfert : la largeur $\sigma$ n'a pas de sens mécanique, les pics voisins se compensent, un décalage global du retrait est absorbé par des gaussiennes très larges (fausse $\Sigma w$).
 """
@@ -92,7 +98,7 @@ et le modèle est **paramétré par $w$** (le pic $P$ en est déduit). Comme pou
 
 $$r(x,t_k)\approx b(t_k)+\sum_i \bar\varepsilon\big(x-c_i;\,w_i(t_k),\lambda_i,a_i(t_k)\big)$$
 
-- **Fond $b(t_k)$** (µε) : décalage global libre à chaque date (écart du modèle de retrait, fibres d'orientation Y plus hautes…), pour qu'il ne soit pas absorbé par de fausses fissures (désactivable).
+- **Fond $b(t_k)$** (µε) : décalage global libre à chaque date (écart du modèle de retrait, fibres d'orientation Y plus hautes…), pour qu'il ne soit pas absorbé par de fausses fissures. **Désactivé par défaut** : le fond absorbe l'erreur du modèle de retrait ; sans lui, mesure = retrait + fissures.
 - **Pondération asymétrique** : les points où la mesure est **sous** le modèle (creux que le modèle de fissures ne sait pas représenter) pèsent $W_{neg}<1$ ; $W_{neg}=1$ donne des moindres carrés ordinaires.
 - Chaque fissure a son propre $\lambda_i$ (**constant dans le temps** : propriété de l'interface) et son cœur $a_i(t)$ (**non décroissant**).
 

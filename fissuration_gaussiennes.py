@@ -336,7 +336,7 @@ def figure_profil(hist, t, cube, segment):
     total = np.zeros_like(xf)
     for k, g in enumerate(Gs):
         gi = g["A"] * np.exp(-0.5 * ((xf - g["c"]) / g["S"]) ** 2); total += gi
-        col = pal[k % len(pal)]
+        col = pal[int(g["id"]) % len(pal)]
         fig.add_trace(go.Scatter(x=xf, y=mf, mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=xf, y=mf + gi, mode="lines", line=dict(color=col, width=1), fill="tonexty",
                                  name=f"X={g['c']:.0f} mm : w={ouverture_um(g['A'], g['S']):.0f} µm",
@@ -359,7 +359,7 @@ def figure_ouvertures(tab, cube, segment):
     for k, (i, g) in enumerate(tab.groupby("id")):
         g = g.sort_values("t_j")
         fig.add_trace(go.Scatter(x=g["t_j"], y=g["w_um"], mode="lines+markers", marker=dict(size=4),
-                                 line=dict(color=pal[k % len(pal)]), name=f"X={g['pos_mm'].iloc[0]:.0f} mm"))
+                                 line=dict(color=pal[int(i) % len(pal)]), name=f"X={g['pos_mm'].iloc[0]:.0f} mm"))
     s = tab.groupby("t_j")["w_um"].sum()
     fig.add_trace(go.Scatter(x=s.index, y=s.values, mode="lines", line=dict(color="black", width=3), name="Σw"))
     fig.update_layout(title=f"{cube} {segment} — ouverture de chaque fissure et somme",
@@ -371,7 +371,7 @@ def figure_suivi(tab, cube, segment):
     """Figure Plotly : carte position × temps, taille des points ∝ ouverture."""
     import plotly.express as px
     d = tab.copy(); d["w_aff"] = d["w_um"].clip(lower=0.5)
-    fig = px.scatter(d, x="pos_mm", y="t_j", size="w_aff", color=d["id"].astype(str), size_max=22,
+    fig = px.scatter(d, x="pos_mm", y="t_j", size="w_aff", color=d["id"].astype(str), color_discrete_map={str(i): px.colors.qualitative.Plotly[int(i) % 10] for i in d["id"].unique()}, size_max=22,
                      hover_data={"w_um": ":.1f", "sigma_mm": ":.1f", "w_aff": False},
                      labels={"pos_mm": "Position le long de la fibre (mm)", "t_j": "Temps écoulé (j)", "color": "gaussienne"},
                      title=f"{cube} {segment} — suivi des gaussiennes (taille ∝ ouverture)")
@@ -385,6 +385,7 @@ def figure_surface(tab, cube, segment, n_x=None, n_t_max=60):
     Chaque fissure (gaussienne) est à sa position c_i constante ; w_i(t) = A_i·σ_i·√(2π)·1e-3 est son ouverture (µm,
     non décroissante après régularisation). Des tiges verticales (z = 0 → w) relient chaque courbe à la base à la dernière date.
     n_x est conservé pour compatibilité (inutilisé) ; les dates sont sous-échantillonnées au-delà de n_t_max."""
+    import plotly.express as px
     import plotly.graph_objects as go
     ts = np.sort(tab["t_j"].unique())
     if len(ts) > n_t_max:
@@ -393,7 +394,8 @@ def figure_surface(tab, cube, segment, n_x=None, n_t_max=60):
     fig = go.Figure()
     for i, q in d.groupby("id"):
         q = q.sort_values("t_j"); c = float(q["pos_mm"].iloc[0])
-        fig.add_trace(go.Scatter3d(x=q["t_j"], y=np.full(len(q), c), z=q["w_um"], mode="lines", line=dict(width=5),
+        fig.add_trace(go.Scatter3d(x=q["t_j"], y=np.full(len(q), c), z=q["w_um"], mode="lines",
+                                   line=dict(width=5, color=px.colors.qualitative.Plotly[int(i) % 10]),
                                    name=f"X={c:.0f} mm", hovertemplate="t=%{x:.1f} j<br>X=" + f"{c:.1f}"
                                    + " mm<br>w=%{z:.1f} µm<extra></extra>"))
         fig.add_trace(go.Scatter3d(x=[q["t_j"].iloc[-1]] * 2, y=[c, c], z=[0, float(q["w_um"].iloc[-1])], mode="lines",
