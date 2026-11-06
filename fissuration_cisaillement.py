@@ -9,7 +9,8 @@ Adaptation de fissuration_cisaillement.py :
         ε(s) = P/(1+λa) · exp(−λ(|s|−a))  pour |s| > a   (transfert exponentiel)
     avec a = 0 on retrouve le noyau exponentiel pur. COD = ∫ε dx = (2P/λ)(1+s+s²/2)/(1+s), s = λa ;
     on paramètre par w (COD) et on en déduit P. Le noyau est MOYENNÉ sur la jauge de l'OBR de façon analytique ;
-  - FOND : un décalage b(t) (ε_fond, µε) par échéance est ajusté avec les fissures (écart global du retrait) ;
+  - FOND : désactivé par défaut (la mesure = retrait + fissures, sans degré de liberté sur le retrait) ; `--avec-fond` ajuste
+    un décalage b(t) (ε_fond, µε) par échéance, ce qui absorbe l'erreur du modèle de retrait ;
   - DÉTECTION comme OBRstudio : pics de proéminence ≥ PROM_FACTEUR × bruit (auto), ouverture initiale = aire du profil
     au-dessus d'un plancher, puis affinage par moindres carrés ; complément glouton ;
   - méthode « aires » conservée comme recoupement indépendant (colonne w_aires_um) ;
@@ -39,6 +40,7 @@ _trapz = getattr(np, "trapezoid", None) or np.trapz   # NumPy ≥ 2 : trapezoid
 
 import fit_retrait as F
 from fissuration_gaussiennes import donnees_segment, THETA_DEFAUT, T0_DEFAUT
+from fissuration_gaussiennes import figure_surface as figure_surface_ouvertures
 
 # ----------------------------------------------------------------------------- réglages
 JAUGE_MM = 5.0
@@ -53,7 +55,7 @@ COD_MIN = 2.0                    # µm : ouverture minimale d'une fissure (élag
 PLAFOND_UM = 5000.0              # µm : COD maximal
 PROM_FACTEUR = 2.0               # proéminence auto = facteur × bruit (MAD ≈ rugosité du signal, pas bruit instrumental pur)
 PLANCHER = "local"               # "local" (quart bas des creux) | "zero"
-FOND = True                      # ajuste un décalage b(t) par échéance
+FOND = False                     # True : ajuste un décalage b(t) par échéance (absorbe l'erreur du retrait ; déconseillé)
 FOND_MAX = 3e4                   # µε
 W_NEG = 0.3                      # poids des résidus où la mesure est SOUS le modèle (creux non modélisables)
 ADD_GAIN = 0.04                  # gain relatif minimal du SSE pour ajouter une fissure (complément glouton)
@@ -514,8 +516,9 @@ class AucuneFissure(ValueError):
 
 
 def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), verbose=True, multi=False, duree_min=DUREE_MIN,
-             dates=None):
-    """dates : sous-ensemble d'échéances (jours) à analyser (défaut : toutes celles ≥ t0).
+             dates=None, progression=None):
+    """progression(fraction, texte) : rappel optionnel d'avancement (dashboard).
+    dates : sous-ensemble d'échéances (jours) à analyser (défaut : toutes celles ≥ t0).
     Retourne (tableau des fissures, hist, centres) ; hist[t] = (x, résidu, ajustement, mesure, retrait modèle) en µε."""
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
@@ -549,6 +552,10 @@ def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), v
     for k in range(T - 2, -1, -1):                         # suivi à rebours, centres figés
         c, w, l, a, bk, _ = ajuster_date(xs[k], rs[k], C, W0[:, k + 1], L0[:, k + 1], A0[:, k + 1], np.zeros(n, bool), B0[k + 1])
         W0[:, k] = np.minimum(w, W0[:, k + 1]); L0[:, k] = l; A0[:, k] = np.minimum(a, A0[:, k + 1]); B0[k] = bk
+        if progression:
+            progression(0.4 * (T - 1 - k) / T, f"suivi à rebours {echeances[k]:.1f} j")
+    if progression:
+        progression(0.4, "ajustement global (phase la plus longue)")
     Wf, Lf, Af, Cf, Bf = global_regularise(xs, rs, C, W0, L0, A0, B0)
     lignes, hist = [], {}
     for k, t in enumerate(echeances):
@@ -591,7 +598,7 @@ def tracer(cube, seg, h, df, hist, chemin):
 
 
 def analyser_segment(h, dates=None, preset=None, tol_lambda=0.0, lam_global=None, signe="+", forcees=(), interdites=(),
-                     multi=True, duree_min=None, prom=None, t0=0.0, **reglage):
+                     multi=True, duree_min=None, prom=None, t0=0.0, progression=None, **reglage):
     """Point d'entrée du dashboard et des scripts exportés : applique les réglages (constantes du module, restaurées ensuite)
     puis lance analyser(). `reglage` : largeur_max, plafond_mm, jauge, prom_facteur, prom_multi, glouton, marge_bord, a_max,
     codmin, w_neg, plancher, dist_min, decalage_max, n_max, w_min, add_gain, fond (voir configurer).
@@ -605,7 +612,7 @@ def analyser_segment(h, dates=None, preset=None, tol_lambda=0.0, lam_global=None
             lambda_global(h, lam_global, tol_lambda, signe)
         return analyser(h, t0, signe, prom, list(forcees), list(interdites), verbose=False, multi=multi,
                         duree_min=DUREE_MIN if duree_min is None else duree_min,
-                        dates=None if dates is None else np.asarray(dates))
+                        dates=None if dates is None else np.asarray(dates), progression=progression)
 
 
 # ----------------------------------------------------------------------------- figures Plotly (dashboard / notebook)
@@ -694,23 +701,9 @@ def figure_suivi(tab, cube, segment):
     return fig
 
 
-def figure_surface(tab, cube, segment, n_x=200, n_t_max=60):
-    """Surface X = temps, Y = position, Z = ouverture linéique Σ noyau_i·1e-3 (µm/mm) ; ∫ Z dx = Σw(t)."""
-    import plotly.graph_objects as go
-    ts = np.sort(tab["t_j"].unique())
-    if len(ts) > n_t_max:
-        ts = ts[np.unique(np.linspace(0, len(ts) - 1, n_t_max).round().astype(int))]
-    xs = np.linspace(max(tab["pos_mm"].min() - 15, 0), min(tab["pos_mm"].max() + 15, 100.0), n_x)
-    Z = np.zeros((len(xs), len(ts)))
-    for k, t in enumerate(ts):
-        for _, r in tab[tab["t_j"] == t].iterrows():
-            Z[:, k] += noyau(xs, r["pos_mm"], r["w_um"], r["lambda_m1"] / 1000, r["coeur_a_mm"]) * 1e-3
-    fig = go.Figure(go.Surface(x=ts, y=xs, z=Z, colorscale="Inferno", colorbar=dict(title="µm/mm"),
-                               hovertemplate="t=%{x:.1f} j<br>X=%{y:.1f} mm<br>w'=%{z:.2f} µm/mm<extra></extra>"))
-    fig.update_layout(title=f"{cube} {segment} — ouverture linéique des fissures", height=560,
-                      scene=dict(xaxis_title="Temps écoulé (j)", yaxis_title="Position fibre (mm)", zaxis_title="Ouverture (µm/mm)"),
-                      margin=dict(l=0, r=0, t=40, b=0))
-    return fig
+def figure_surface(tab, cube, segment, n_x=None, n_t_max=60):
+    """Figure 3D temps × position × ouverture w (µm) par fissure (même tracé que les gaussiennes)."""
+    return figure_surface_ouvertures(tab, cube, segment, n_x, n_t_max)
 
 
 def _liste(s):
@@ -722,7 +715,8 @@ def main():
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12")
     ap.add_argument("--segment", default="s14")
     ap.add_argument("--t0", type=float, default=T0_DEFAUT)
-    ap.add_argument("--theta", type=float, nargs=4, metavar=("N", "k", "a", "n"), default=THETA_DEFAUT)
+    ap.add_argument("--theta", type=float, nargs="+", metavar="V", default=THETA_DEFAUT,
+                    help="retrait N k a n [beta alpha_crit]")
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT)
     ap.add_argument("--jauge", type=float, default=None, help="largeur de jauge OBR en mm (défaut 5)")
     ap.add_argument("--preset", choices=sorted(PRESETS), help="câble / pose : bornes de λ, a, COD ; λ imposé si 1/λ connu")
@@ -734,7 +728,7 @@ def main():
     ap.add_argument("--a-max", type=float, default=None, help=f"demi-largeur max du cœur en mm (défaut {A_CUBE_MM}) ; 0 = noyau exponentiel pur")
     ap.add_argument("--largeur-max", type=float, default=None, metavar="mm", help="longueur de transfert maximale 1/λ (mm) ; défaut 10 avec --multi, sinon aucune ; 0 = aucune limite")
     ap.add_argument("--plancher", choices=["local", "zero"], default=None, help="fond initial / plancher des aires")
-    ap.add_argument("--sans-fond", action="store_true", help="pas de décalage b(t) ajusté")
+    ap.add_argument("--avec-fond", action="store_true", help="ajuste un décalage b(t) par échéance (défaut : fond figé à 0)")
     ap.add_argument("--w-neg", type=float, default=None, help=f"poids des points sous le modèle (défaut {W_NEG} ; 1 = symétrique)")
     ap.add_argument("--forcees", default="", help="positions (mm) de fissures imposées, séparées par des virgules")
     ap.add_argument("--interdites", default="", help="positions (mm) où aucune fissure n'est admise")
@@ -751,7 +745,7 @@ def main():
     configurer(preset=a.preset, tol_lambda=a.tol_lambda, largeur_max=a.largeur_max, plafond_mm=a.plafond, multi=a.multi,
                jauge=a.jauge, prom_facteur=a.prom_facteur, prom_multi=a.prom_multi, glouton=a.glouton or None,
                marge_bord=a.marge_bord, a_max=a.a_max, codmin=a.codmin, w_neg=a.w_neg, plancher=a.plancher,
-               fond=False if a.sans_fond else None)
+               fond=True if a.avec_fond else None)
     h = donnees_segment(a.cube, a.segment, a.theta, a.de)
     if a.lambda_global:
         try:

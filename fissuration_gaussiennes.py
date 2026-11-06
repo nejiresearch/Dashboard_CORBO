@@ -42,7 +42,7 @@ A_MIN = 500.0         # µε : amplitude minimale d'une gaussienne ajoutée
 DIST_MIN = 2.0        # mm : distance minimale entre deux centres à l'ajout
 DECALAGE_MAX = 4.0    # mm : déplacement autorisé du centre à la première échéance
 N_MAX = 25            # gaussiennes maximum
-THETA_DEFAUT = (23262.0, 0.0387, 5981.0, 1.07)   # (N, k, a, n) du fit C12, D_e = 3,7e-7 m2/s
+THETA_DEFAUT = (23262.0, 0.0387, 5981.0, 1.07, 0.0, 0.3)   # (N, k, a, n, beta, alpha_crit) du fit C12 sans dommage, D_e = 3,7e-7 m2/s
 
 
 def somme_gauss(x, C, A, S):
@@ -149,8 +149,10 @@ def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1, g=None):
     return h
 
 
-def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False, regul=True, dates=None, t_calage=None):
-    """Retourne (tableau long des gaussiennes, historique par échéance).
+def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_arriere=False, regul=True, dates=None, t_calage=None,
+             progression=None):
+    """progression(fraction, texte) : rappel optionnel d'avancement (dashboard).
+    Retourne (tableau long des gaussiennes, historique par échéance).
 
     arriere=True : les centres sont déterminés sur la DERNIÈRE échéance (signal le mieux résolu),
     puis figés et suivis à rebours ; A_i(t) → 0 aux dates où la gaussienne n'est pas encore apparue.
@@ -178,6 +180,8 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
         sse = suivi.traiter(x, q["r"].values, premier=(k == 0), ajouts=(k == 0 or not arriere or ajout_arriere),
                             fusion=fusion)
         hist[t] = (x, q, [dict(g) for g in suivi.G], sse)
+        if progression:
+            progression(0.3 * (k + 1) / len(ordre), f"suivi {t:.1f} j ({k + 1}/{len(ordre)})")
         if t == t_ref:
             etat_ref = [dict(g) for g in suivi.G]
         textes[t] = [f"{t:6.1f} j : {len(suivi.G):2d} gaussiennes, RMSE={np.sqrt(sse / len(x)):4.0f} µε, "
@@ -185,6 +189,8 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
     if regul and arriere and not fusion:
         if verbose:
             print('Suivi à rebours terminé ; ajustement global régularisé :')
+        if progression:
+            progression(0.3, "ajustement global régularisé (phase la plus longue)")
         hist = regulariser(hist, lam_sigma=LAMBDA_SIGMA, verbose=verbose, t_ref=t_ref); textes = {t: [] for t in echeances}
     for t in echeances:
         for g in hist[t][2]:
@@ -373,26 +379,28 @@ def figure_suivi(tab, cube, segment):
     return fig
 
 
-def figure_surface(tab, cube, segment, n_x=200, n_t_max=60):
-    """Surface Plotly : X = temps, Y = position, Z = ouverture linéique des fissures (µm/mm).
+def figure_surface(tab, cube, segment, n_x=None, n_t_max=60):
+    """Figure 3D : X = temps, Y = position de la fissure, Z = ouverture w (µm), une courbe par fissure.
 
-    Z(x, t) = Σ_i A_i(t)·exp(-(x-c_i)²/2σ_i²)·1e-3 : son intégrale sur x vaut Σ w_i(t) (µm).
-    Évaluation directe sur une grille (n_x × ≤ n_t_max), sans interpolation ni pivotage ; les dates sont sous-échantillonnées
-    au-delà de n_t_max (première et dernière conservées)."""
+    Chaque fissure (gaussienne) est à sa position c_i constante ; w_i(t) = A_i·σ_i·√(2π)·1e-3 est son ouverture (µm,
+    non décroissante après régularisation). Des tiges verticales (z = 0 → w) relient chaque courbe à la base à la dernière date.
+    n_x est conservé pour compatibilité (inutilisé) ; les dates sont sous-échantillonnées au-delà de n_t_max."""
     import plotly.graph_objects as go
     ts = np.sort(tab["t_j"].unique())
     if len(ts) > n_t_max:
         ts = ts[np.unique(np.linspace(0, len(ts) - 1, n_t_max).round().astype(int))]
-    xs = np.linspace(max(tab["pos_mm"].min() - 15, 0), min(tab["pos_mm"].max() + 15, 100.0), n_x)
-    Z = np.zeros((len(xs), len(ts)))
-    for k, t in enumerate(ts):
-        d = tab[tab["t_j"] == t]
-        Z[:, k] = somme_gauss(xs, d["pos_mm"].values, d["A_microdef"].values, d["sigma_mm"].values) * 1e-3
-    fig = go.Figure(go.Surface(x=ts, y=xs, z=Z, colorscale="Inferno", colorbar=dict(title="µm/mm"),
-                               hovertemplate="t=%{x:.1f} j<br>X=%{y:.1f} mm<br>w'=%{z:.2f} µm/mm<extra></extra>"))
-    fig.update_layout(title=f"{cube} {segment} — ouverture linéique des fissures", height=560,
-                      scene=dict(xaxis_title="Temps écoulé (j)", yaxis_title="Position fibre (mm)",
-                                 zaxis_title="Ouverture (µm/mm)"), margin=dict(l=0, r=0, t=40, b=0))
+    d = tab[tab["t_j"].isin(ts)]
+    fig = go.Figure()
+    for i, q in d.groupby("id"):
+        q = q.sort_values("t_j"); c = float(q["pos_mm"].iloc[0])
+        fig.add_trace(go.Scatter3d(x=q["t_j"], y=np.full(len(q), c), z=q["w_um"], mode="lines", line=dict(width=5),
+                                   name=f"X={c:.0f} mm", hovertemplate="t=%{x:.1f} j<br>X=" + f"{c:.1f}"
+                                   + " mm<br>w=%{z:.1f} µm<extra></extra>"))
+        fig.add_trace(go.Scatter3d(x=[q["t_j"].iloc[-1]] * 2, y=[c, c], z=[0, float(q["w_um"].iloc[-1])], mode="lines",
+                                   line=dict(width=2, color="gray"), showlegend=False, hoverinfo="skip"))
+    fig.update_layout(title=f"{cube} {segment} — ouverture w de chaque fissure (µm)", height=560,
+                      scene=dict(xaxis_title="Temps écoulé (j)", yaxis_title="Position fibre (mm)", zaxis_title="Ouverture w (µm)"),
+                      margin=dict(l=0, r=0, t=40, b=0))
     return fig
 
 
@@ -402,8 +410,8 @@ if __name__ == "__main__":
     ap.add_argument("--segment", default="s14")
     ap.add_argument("--t-calage", type=float, default=None, help="échéance de calage des gaussiennes (défaut : dernière)")
     ap.add_argument("--t0", type=float, default=T0_DEFAUT, help="première échéance analysée (jours)")
-    ap.add_argument("--theta", type=float, nargs=4, metavar=("N", "k", "a", "n"),
-                    help="paramètres du retrait (défaut : fit C12, D_e = 3,7e-7 m2/s)")
+    ap.add_argument("--theta", type=float, nargs="+", metavar="V",
+                    help="paramètres du retrait N k a n [beta alpha_crit] (défaut : fit C12, D_e = 3,7e-7 m2/s)")
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT, help="D_e utilisé avec --theta (m2/s)")
     ap.add_argument("--refit", action="store_true", help="ré-ajuste le retrait sur le cube (≈ 10 s)")
     ap.add_argument("--avant", action="store_true", help="ancien ordre chronologique (centres déterminés à t0)")
@@ -417,7 +425,7 @@ if __name__ == "__main__":
     theta = np.array(args.theta if args.theta else THETA_DEFAUT)
     if args.refit:
         theta = F.ajuster(F.prepare(args.cube), args.de)
-    print(f"retrait : N={theta[0]:.0f} k={theta[1]:.4f} a={theta[2]:.0f} n={theta[3]:.2f} (D_e={args.de:.1e})")
+    print(f"retrait : " + " ".join(f"{nm}={v:.3g}" for nm, v in zip(F.PARAM_NOMS, theta)) + f" (D_e={args.de:.1e})")
     h = donnees_segment(args.cube, args.segment, theta, args.de)
     tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion, regul=not args.sans_regul,
                        t_calage=args.t_calage)
