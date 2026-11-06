@@ -5,6 +5,7 @@ les données allégées (F.prepare) et chaque résultat sont mis en cache.
 Les figures sont des figures Plotly construites par fissuration_gaussiennes.py (même code que le script exporté).
 """
 import threading
+import time
 
 import numpy as np
 import pandas as pd
@@ -69,7 +70,7 @@ def _theorie_params():
     e = tab(PARAMS_EXP) + (
         "\n| Détection multi-échéances | oui | case | Trajectoires de pics sur toutes les dates (sinon : dernière échéance + complément glouton). |"
         "\n| Complément glouton après le multi | non | case | Ajoute des fissures sur le résidu non expliqué (lent, ajoute des fissures de bord). |"
-        "\n| Fond b(t) ajusté | oui | case | Décalage global libre par date (écart du modèle de retrait). |"
+        "\n| Fond b(t) ajusté | non | case | Décalage global libre par date (absorbe l'erreur du modèle de retrait ; décoché : mesure = retrait + fissures). |"
         "\n| Signe des fissures | + | +, −, auto | La physique impose des pics positifs ; « auto » choisit le signe dominant (déconseillé). |"
         "\n| Plancher | local | local, zéro | Niveau du « béton sain » pour l'ouverture initiale et les aires (quart bas des creux, ou 0). |"
         "\n| Preset câble / pose | aucun | liste | Bornes de λ, a, COD d'un câble type (OBRstudio) ; remplace a max, COD min, COD max. |"
@@ -89,14 +90,15 @@ def _theta(cube, de, refit, manuel):
 
 
 @st.cache_data(show_spinner=False)
-def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage):
+def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage, _progression=None):
     h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
     with _VERROU:
         avant = {k: getattr(G, k) for k, _ in params}
         try:
             for k, v in params:
                 setattr(G, k, v)
-            tab, hist = G.analyser(h, t0=0.0, dates=np.array(dates), verbose=False, regul=regul, t_calage=t_calage)
+            tab, hist = G.analyser(h, t0=0.0, dates=np.array(dates), verbose=False, regul=regul, t_calage=t_calage,
+                              progression=_progression)
         finally:
             for k, v in avant.items():
                 setattr(G, k, v)
@@ -104,7 +106,7 @@ def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage)
 
 
 @st.cache_data(show_spinner=False)
-def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm):
+def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm, _progression=None):
     """Méthode exponentielle : retourne (tab, hist) ou ('erreur', message)."""
     h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
     p = dict(params)
@@ -112,7 +114,7 @@ def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm):
         p[k] = E._liste(p.get(k, ""))
     with _VERROU:
         try:
-            tab, hist, _ = E.analyser_segment(h, dates=np.array(dates), **p)
+            tab, hist, _ = E.analyser_segment(h, dates=np.array(dates), progression=_progression, **p)
         except (E.AucuneFissure, ValueError) as e:
             return "erreur", str(e)
     return E.groupes(tab, ecart_mm=groupe_mm), hist
@@ -175,8 +177,9 @@ def _widgets_exp():
                                help="Trajectoires de pics sur toutes les échéances (recommandé). Sinon : détection sur la dernière échéance.")
     v["glouton"] = c[1].checkbox("Complément glouton", value=False, key="fissexp_glouton",
                                  help="Ajoute des fissures sur le résidu non expliqué (lent ; ajoute souvent des fissures de bord).")
-    v["fond"] = c[2].checkbox("Fond b(t) ajusté", value=True, key="fissexp_fond",
-                              help="Décalage global libre à chaque date (écart du modèle de retrait).")
+    v["fond"] = c[2].checkbox("Fond b(t) ajusté", value=False, key="fissexp_fond",
+                              help="Décalage global libre à chaque date. Déconseillé : il absorbe l'erreur du modèle de retrait ; "
+                                   "décoché, mesure = retrait + fissures.")
     c = st.columns(3)
     v["signe"] = c[0].selectbox("Signe des fissures", ["+", "-", "auto"], key="fissexp_signe",
                                 help="La physique impose des pics positifs ; « auto » choisit le signe dominant (déconseillé).")
@@ -252,11 +255,15 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
         de = c5.number_input("D_e (m²/s)", value=float(F.DE_DEFAUT), format="%.2e")
         with st.expander("⚙️ Paramètres avancés (retrait et fissuration)"):
             st.markdown("**Retrait** (ignoré si « Ré-ajuster » est coché)")
-            r1, r2, r3, r4 = st.columns(4)
+            r1, r2, r3, r4, r5, r6 = st.columns(6)
             th = [r1.number_input("N", value=float(G.THETA_DEFAUT[0]), step=100.0, format="%.0f"),
                   r2.number_input("k (1/j)", value=float(G.THETA_DEFAUT[1]), step=0.001, format="%.4f"),
                   r3.number_input("a (µε)", value=float(G.THETA_DEFAUT[2]), step=50.0, format="%.0f"),
-                  r4.number_input("n", value=float(G.THETA_DEFAUT[3]), step=0.01, format="%.2f")]
+                  r4.number_input("n", value=float(G.THETA_DEFAUT[3]), step=0.01, format="%.2f"),
+                  r5.number_input("β (dommage)", value=float(G.THETA_DEFAUT[4]), min_value=0.0, step=0.1, format="%.3g",
+                                  help="D_eff = D_e·(1 + β·max(0, α − α_crit)^m), m = 2. 0 : diffusion constante."),
+                  r6.number_input("α_crit", value=float(G.THETA_DEFAUT[5]), min_value=0.01, max_value=0.99, step=0.05,
+                                  format="%.2f", help="Degré de carbonatation au-delà duquel la fissuration accélère la diffusion.")]
             vals, vexp = {}, {}
             if not seul and exp:
                 st.markdown("**Fissuration : exponentielle (shear lag)**")
@@ -296,7 +303,8 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     exp = job["methode"] == METHODES[1]
 
     theta = _theta(cube, job["de"], job["refit"], job["theta"])
-    st.write(f"Retrait : N={theta[0]:.0f}, k={theta[1]:.4f}, a={theta[2]:.0f}, n={theta[3]:.2f}"
+    st.write(f"Retrait : N={theta[0]:.0f}, k={theta[1]:.4f}, a={theta[2]:.0f}, n={theta[3]:.2f}, "
+             f"β={theta[4]:.3g}, α_crit={theta[5]:.2f}"
              + ("" if seul else (" · exponentielle (shear lag)" if exp else f" · gaussiennes calées à {job['t_calage']:.1f} j")))
     _, col_cube, _ = st.columns([1, 1, 1])
     with col_cube:
@@ -309,18 +317,32 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
 
     barre = st.progress(0.0)
     resultats = {}
+    nseg = len(job["segs"]); t_debut = time.time()
+
+    def suivi(k, s):
+        """Rappel d'avancement : compteur de temps écoulé et estimation du temps restant."""
+        def cb(frac, texte):
+            glob = (k + min(frac, 1.0)) / nseg
+            ecoule = time.time() - t_debut
+            reste = f" · reste ≈ {int(ecoule * (1 - glob) / glob)} s" if glob > 0.02 else ""
+            barre.progress(min(glob, 1.0), text=f"Segment {s} ({k + 1}/{nseg}) : {texte} · {int(ecoule)} s écoulées{reste}")
+        return cb
+
     for k, s in enumerate(job["segs"]):
-        barre.progress(k / len(job["segs"]), text=f"Segment {s} ({k + 1}/{len(job['segs'])})…")
+        barre.progress(k / nseg, text=f"Segment {s} ({k + 1}/{nseg})…")
         if exp:
             p = {k2: (tuple(v) if isinstance(v, list) else v) for k2, v in job["exp_params"].items() if k2 != "groupe"}
-            r = _calcul_exp(cube, s, job["dates"], theta, job["de"], tuple(sorted(p.items(), key=lambda kv: kv[0])), job["groupe"])
+            r = _calcul_exp(cube, s, job["dates"], theta, job["de"], tuple(sorted(p.items(), key=lambda kv: kv[0])), job["groupe"],
+                           _progression=suivi(k, s))
         else:
-            r = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"], job["t_calage"])
+            r = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"], job["t_calage"],
+                        _progression=suivi(k, s))
         if isinstance(r[0], str):
             st.warning(f"Segment {s} : {r[1]}")
         else:
             resultats[s] = r
     barre.empty()
+    st.caption(f"Calcul terminé en {time.time() - t_debut:.0f} s (résultats déjà calculés réutilisés).")
     if not resultats:
         return
 

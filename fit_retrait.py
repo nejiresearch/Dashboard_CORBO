@@ -13,7 +13,10 @@ Modèle (réaction-diffusion couplée)
 - Résolution 1D dans une demi-dalle (symétrie), puis combinaison 3D approchée :
       alpha_3D = 1 - prod_i (1 - alpha_1D(distance à la face i))
 
-Paramètres ajustés : N (mol CO2 / m3, capacité de fixation), k (1/jour), a (µε), n.
+Endommagement : D_eff = D_e * (1 + beta * max(0, alpha - alpha_crit)**m) (m fixé).
+
+Paramètres ajustés : N (mol CO2 / m3, capacité de fixation), k (1/jour), a (µε), n,
+beta, alpha_crit.
 Seul le rapport N / D_e est identifiable : N est proportionnel au D_e choisi.
 Si N est mesuré (ATG), on en déduit D_e = N * (D_e_ref / N_fit) avec les valeurs affichées.
 
@@ -30,6 +33,8 @@ Par défaut : ajuste C12, valide sur C34 avec les paramètres de C12.
 from __future__ import annotations
 
 import argparse
+import sys
+import time
 import warnings
 
 import numpy as np
@@ -51,8 +56,11 @@ DT = 0.25            # jours, pas de temps
 TMAX = 114.0         # jours
 NX = int(L / 2 / DX) + 1
 NSTEP = int(TMAX / DT)
-PARAM_NOMS = ("N", "k", "a", "n")
-BORNES = ([np.log(100), np.log(1e-3), 0.0, 0.3], [np.log(5e5), np.log(5.0), 3e4, 4.0])
+M_DOMMAGE = 2.0      # exposant de sensibilité m du dommage (fixé)
+PARAM_NOMS = ("N", "k", "a", "n", "beta", "alpha_crit")
+# N, k, beta, alpha_crit sont optimisés en espace logarithmique
+BORNES = ([np.log(100), np.log(1e-3), 0.0, 0.3, np.log(1e-3), np.log(0.05)],
+          [np.log(5e5), np.log(5.0), 3e4, 4.0, np.log(1e3), np.log(0.99)])
 DEPARTS = ((5000, 0.05), (20000, 0.2), (2000, 0.02))  # (N0, k0)
 
 
@@ -75,15 +83,20 @@ def prepare(cube: str, n_dates: int = N_DATES, bin_mm: float = BIN_MM) -> pd.Dat
     return g[dans & g["eps"].notna()].reset_index(drop=True)
 
 
-def alpha_1d(N, k, De):
-    """alpha(t, x) sur une demi-dalle [0, L/2], tableau (NSTEP+1, NX)."""
+def alpha_1d(N: float, k: float, De: float, beta: float, alpha_crit: float,
+             m: float = M_DOMMAGE) -> np.ndarray:
+    """alpha(t, x) sur une demi-dalle [0, L/2], tableau (NSTEP+1, NX).
+
+    D_eff(x, t) = De * (1 + beta * max(0, alpha - alpha_crit)**m) : la fissuration
+    (liée à la carbonatation locale) accélère la diffusion du CO2."""
     al = np.zeros(NX)
     out = np.zeros((NSTEP + 1, NX))
     ab = np.zeros((3, NX))
     h = 1 / DX ** 2
     rhs = np.zeros(NX); rhs[0] = 1.0
     for s in range(NSTEP):
-        lam = N * (k / 86400.0) * (1 - al) / (De * C0)
+        d_eff = De * (1 + beta * np.maximum(0.0, al - alpha_crit) ** m)   # vecteur, taille NX
+        lam = N * (k / 86400.0) * (1 - al) / (d_eff * C0)
         ab[1] = 2 * h + lam
         ab[0, 1:] = -h
         ab[2, :-1] = -h
@@ -111,9 +124,9 @@ def alpha_3d(A, X, Y, Z, t_jours):
 
 
 def modele(theta, g: pd.DataFrame, De: float = DE_DEFAUT) -> np.ndarray:
-    """Retrait de la matrice (µε) aux points de g, theta = (N, k, a, n)."""
-    N, k, a, n = theta
-    A = alpha_1d(N, k, De)
+    """Retrait de la matrice (µε) aux points de g, theta = (N, k, a, n, beta, alpha_crit)."""
+    N, k, a, n, beta, alpha_crit = (list(theta) + [0.0, 0.3][len(theta) - 4:])[:6]   # 4 valeurs : sans dommage
+    A = alpha_1d(N, k, De, beta, alpha_crit)
     alpha = alpha_3d(A, g["X"].values, g["Y"].values, g["Z"].values, g["temps_ecoule_j"].values)
     return -a * alpha ** n
 
@@ -121,19 +134,28 @@ def modele(theta, g: pd.DataFrame, De: float = DE_DEFAUT) -> np.ndarray:
 def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE) -> np.ndarray:
     """Ajustement de l'enveloppe basse (perte asymétrique), multi-départs sur (N, k)."""
     eps = g["eps"].values
+    etat = {"n": 0, "t0": time.time(), "depart": 0}
 
     def residus(q):
-        r = modele([np.exp(q[0]), np.exp(q[1]), q[2], q[3]], g, De) - eps
+        etat["n"] += 1
+        ecoule = time.time() - etat["t0"]
+        sys.stderr.write(f"\r  départ {etat['depart']}/{len(DEPARTS)} | évaluations : "
+                         f"{etat['n']} | écoulé : {ecoule:.0f} s")
+        sys.stderr.flush()
+        r = modele([np.exp(q[0]), np.exp(q[1]), q[2], q[3], np.exp(q[4]), np.exp(q[5])],
+                   g, De) - eps
         return np.where(r < 0, np.sqrt(w) * r, r)   # r < 0 : mesure au-dessus du modèle
 
     meilleur = None
-    for N0, k0 in DEPARTS:
-        r = least_squares(residus, [np.log(N0), np.log(k0), 6000.0, 1.0], bounds=BORNES,
-                          x_scale=[1, 1, 1000, 1], diff_step=1e-3)
+    for i, (N0, k0) in enumerate(DEPARTS, 1):
+        etat["depart"] = i
+        r = least_squares(residus, [np.log(N0), np.log(k0), 6000.0, 1.0, np.log(1.0), np.log(0.3)],
+                          bounds=BORNES, x_scale=[1, 1, 1000, 1, 1, 1], diff_step=1e-3)
         if meilleur is None or r.cost < meilleur.cost:
             meilleur = r
+    sys.stderr.write("\n")
     q = meilleur.x
-    return np.array([np.exp(q[0]), np.exp(q[1]), q[2], q[3]])
+    return np.array([np.exp(q[0]), np.exp(q[1]), q[2], q[3], np.exp(q[4]), np.exp(q[5])])
 
 
 def bilan(theta, g: pd.DataFrame, De: float, label: str) -> None:
@@ -149,9 +171,10 @@ def tracer(theta, De: float, cube: str, segments, fichier: str) -> None:
     import matplotlib.pyplot as plt
 
     g = prepare(cube, bin_mm=2)
-    N, k, a, n = theta
+    N, k, a, n, beta, alpha_crit = theta
     txt = (f"Modèle couplé (fit global C12)\nD_e = {De:.1e} m²/s (fixé)\nN = {N:.0f} mol/m³\n"
-           f"k = {k:.3f} j⁻¹\na = {a:.0f} µε\nn = {n:.2f}")
+           f"k = {k:.3f} j⁻¹\na = {a:.0f} µε\nn = {n:.2f}\n"
+           f"β = {beta:.3g}\nα_crit = {alpha_crit:.2f}\nm = {M_DOMMAGE:g} (fixé)")
     couleurs = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"]
     segments = [s for s in segments if s in set(g["segment"])]
     ncol = min(4, len(segments)); nrow = int(np.ceil(len(segments) / ncol))

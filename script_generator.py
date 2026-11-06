@@ -653,7 +653,7 @@ CUBE = {cube!r}
 SEGMENTS = {list(segs)!r}
 DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; le retrait est peu fiable avant ~28 j
 DE = {float(de)!r}                                    # D_e (m2/s)
-THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n (fit C12)
+THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, beta, alpha_crit (fit C12)
 REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n) sur le cube (~10 s)
 T_CALAGE = {None if t_calage is None else round(float(t_calage), 3)!r}   # échéance où les gaussiennes sont calées (None = dernière)
 REGULARISATION = {bool(regul)!r}                      # ajustement global : w_i(t) croissant, sigma_i(t) lisse
@@ -733,7 +733,7 @@ CUBE = {cube!r}
 SEGMENTS = {list(segs)!r}
 DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; le retrait est peu fiable avant ~28 j
 DE = {float(de)!r}                                    # D_e (m2/s)
-THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n (fit C12)
+THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, beta, alpha_crit (fit C12)
 REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n) sur le cube (~10 s)
 GROUPE_MM = {float(params.get("groupe", 8.0))!r}      # regroupement a posteriori des fissures voisines
 # Réglages de la méthode exponentielle (voir la théorie de l'onglet) :

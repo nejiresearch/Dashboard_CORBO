@@ -106,7 +106,7 @@ $$r(x,t_k)\approx b(t_k)+\sum_i \bar\varepsilon\big(x-c_i;\,w_i(t_k),\lambda_i,a
 
 **Indicateurs.** $\Sigma w$ (modèle) et $\Sigma w^{aires}$ ; RMSE ; $1/\lambda_i$ (longueur de transfert), $a_i$ (cœur), pic $P_i$ ; $b(t)$.
 
-**Forces / faiblesses.** + Forme physique (le même noyau pour toutes les fissures), fond ajusté, irréversibilité, recoupement par aires. − **$\lambda$ et $a$ sont mal identifiables à jauge 5 mm** (λ colle souvent à sa borne, $\lambda$ et $a$ sont corrélés) ; le noyau reproduit mal les plateaux larges ; RMSE un peu plus élevé que les gaussiennes ; calcul plus long (≈ 1 min par segment) ; sensible au seuil de détection. La **limite de largeur** ($1/\lambda\le$ `LARGEUR_MAX`, 10 mm par défaut en mode multi) évite qu'une fissure « fantôme » très large absorbe la pente du fond (sinon $\Sigma w$ peut doubler).
+**Forces / faiblesses.** + Forme physique (le même noyau pour toutes les fissures), fond figé par défaut (mesure = retrait + fissures), irréversibilité, recoupement par aires. − **$\lambda$ et $a$ sont mal identifiables à jauge 5 mm** (λ colle souvent à sa borne, $\lambda$ et $a$ sont corrélés) ; le noyau reproduit mal les plateaux larges ; RMSE un peu plus élevé que les gaussiennes ; calcul plus long (≈ 1 min par segment) ; sensible au seuil de détection. La **limite de largeur** ($1/\lambda\le$ `LARGEUR_MAX`, 10 mm par défaut en mode multi) évite qu'une fissure « fantôme » très large absorbe la pente du fond (sinon $\Sigma w$ peut doubler).
 """
 
 LIMITES = r"""
@@ -115,7 +115,7 @@ LIMITES = r"""
 | | Gaussiennes | Exponentielle (shear lag) |
 |---|---|---|
 | Forme du pic | libre (σ) | physique (λ, cœur a) |
-| Fond / décalage global | absorbé par de larges gaussiennes | $b(t)$ ajusté |
+| Fond / décalage global | absorbé par de larges gaussiennes | figé à 0 par défaut ($b(t)$ optionnel) |
 | Détection des centres | glouton sur la date de calage | trajectoires de pics sur toutes les dates |
 | Irréversibilité | $w_i(t)$ croissant | $w_i(t)$ et $a_i(t)$ croissants, λ constant |
 | Recoupement indépendant | — | $\Sigma w^{aires}$ |
