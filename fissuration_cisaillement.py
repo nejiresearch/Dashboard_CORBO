@@ -55,6 +55,8 @@ FOND = True                      # ajuste un décalage b(t) par échéance
 FOND_MAX = 3e4                   # µε
 W_NEG = 0.3                      # poids des résidus où la mesure est SOUS le modèle (creux non modélisables)
 ADD_GAIN = 0.04                  # gain relatif minimal du SSE pour ajouter une fissure (complément glouton)
+PROM_MULTI = 1.5                 # facteur de bruit pour la détection multi-échéances
+DUREE_MIN = 10.0                 # j : durée minimale d'une trajectoire de pic
 W_MIN = 5.0                      # µm : ouverture initiale minimale d'un candidat
 DIST_MIN = 2.0                   # mm : deux centres plus proches sont fusionnés (le plus faible est retiré)
 DECALAGE_MAX = 4.0               # mm
@@ -252,7 +254,35 @@ def _retirer(i, *tabs):
     return tuple(np.delete(t, i) for t in tabs)
 
 
-def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False):
+def candidats_multi(xs, rs, ts, facteur, duree_min, tol, interdites=(), verbose=False):
+    """Détection sur toutes les échéances : pics de chaque résidu lissé (proéminence facteur × bruit de la date),
+    reliés en trajectoires (plus proche trajectoire à moins de tol, sinon nouvelle). Une trajectoire est validée si elle dure
+    ≥ duree_min jours ou si elle est présente aux deux dernières échéances. Retourne les positions (médiane des pics)."""
+    traj = []                                              # [dernière position, [positions], [dates]]
+    for k, (x, r) in enumerate(zip(xs, rs)):
+        pas = float(np.median(np.diff(x)))
+        o = np.argsort(x); x, r = x[o], r[o]
+        pk = x[find_peaks(lisser(r, pas), prominence=facteur * bruit_mad(r))[0]]
+        libres = list(range(len(traj)))
+        for c in pk:
+            j = min(libres, key=lambda i: abs(traj[i][0] - c), default=None)
+            if j is not None and abs(traj[j][0] - c) < tol:
+                libres.remove(j); traj[j][0] = c; traj[j][1].append(c); traj[j][2].append(k)
+            else:
+                traj.append([c, [c], [k]])
+    T = len(ts); C = []
+    for _, pos, ks in traj:
+        duree = ts[ks[-1]] - ts[ks[0]]
+        c = float(np.median(pos))
+        ok = (duree >= duree_min or ks[-1] >= T - 2) and not any(abs(c - i) < tol for i in interdites)
+        if verbose:
+            print(f"    trajectoire X={c:5.1f} mm : {len(ks):2d} dates, {ts[ks[0]]:.0f}→{ts[ks[-1]]:.0f} j  {'✓' if ok else '✗'}")
+        if ok:
+            C.append(c)
+    return sorted(C)
+
+
+def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False, cand_ext=None):
     """Détection sur la dernière échéance, à la OBRstudio :
        1. candidats = pics du résidu lissé de proéminence ≥ prom (auto : PROM_FACTEUR × bruit), sauf positions interdites,
           plus les positions forcées ;
@@ -273,7 +303,9 @@ def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False):
     for f in forcees:
         if not any(abs(c - f) < tol for c in cand):
             cand.append(f)
-    cand = sorted(cand)
+    if cand_ext is not None:
+        cand = [c for c in cand_ext if not interdit(c)] + [f for f in forcees if f is not None]
+    cand = sorted(set(cand))
     if verbose:
         print(f"  bruit {sigma:.1f} µε, proéminence {prom:.0f} µε, fond initial {b0:.0f} µε, {len(cand)} candidat(s) (tol. {tol:.1f} mm)")
     vide = (np.zeros(0),) * 4 + (b0,)
@@ -391,7 +423,7 @@ def appliquer_preset(nom, tol_lambda=0.0):
 
 
 # ----------------------------------------------------------------------------- analyse complète
-def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), verbose=True):
+def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), verbose=True, multi=False, duree_min=DUREE_MIN):
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
     xs, rs = [], []
@@ -406,7 +438,13 @@ def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), v
         paires = estimer_beta(xs[-1], rs[-1], verbose=True)
         if paires:
             print(f"  β médian des paires : {1000 * np.median([p[2] for p in paires]):.0f} m⁻¹ ({len(paires)} paire(s))")
-    C, W, L, A, b = detecter(xs[-1], rs[-1], prom, forcees, interdites, verbose)
+    ext = None
+    if multi:
+        pas = float(np.median(np.diff(xs[-1])))
+        if verbose:
+            print(f"Détection multi-échéances ({len(xs)} dates, proéminence {PROM_MULTI}×bruit, durée ≥ {duree_min:.0f} j) :")
+        ext = candidats_multi(xs, rs, echeances, PROM_MULTI, duree_min, max(1.5 * pas, JAUGE_MM / 4, 3.0), interdites, verbose)
+    C, W, L, A, b = detecter(xs[-1], rs[-1], prom, forcees, interdites, verbose, ext)
     if len(C) == 0:
         raise SystemExit("aucune fissure détectée")
     n, T = len(C), len(echeances)
@@ -461,7 +499,7 @@ def _liste(s):
 
 
 def main():
-    global JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
+    global PROM_MULTI, JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12")
     ap.add_argument("--segment", default="s14")
@@ -484,6 +522,9 @@ def main():
     ap.add_argument("--interdites", default="", help="positions (mm) où aucune fissure n'est admise")
     ap.add_argument("--lambda-global", default=None, metavar="m-1|auto", help="λ commun imposé : valeur en m⁻¹ ou 'auto' (médiane des paires)")
     ap.add_argument("--tol-lambda", type=float, default=0.0, help="tolérance relative autour du λ global (défaut 0 = imposé)")
+    ap.add_argument("--multi", action="store_true", help="détection des centres sur toutes les échéances (trajectoires de pics)")
+    ap.add_argument("--prom-multi", type=float, default=None, help=f"facteur de bruit pour la détection multi (défaut {PROM_MULTI})")
+    ap.add_argument("--duree-min", type=float, default=DUREE_MIN, help="durée minimale (j) d'une trajectoire validée")
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
     warnings.filterwarnings("ignore")
@@ -495,6 +536,8 @@ def main():
         COD_MIN = a.codmin
     if a.plafond is not None:
         PLAFOND_UM = 1000 * a.plafond
+    if a.prom_multi:
+        PROM_MULTI = a.prom_multi
     if a.a_max is not None:
         A_MAX = a.a_max
     if a.largeur_max:
@@ -519,7 +562,7 @@ def main():
         else:
             lam = float(a.lambda_global) / 1000
         fixer_lambda(lam, a.tol_lambda); print(f"λ global = {1000 * lam:.0f} m⁻¹ (± {100 * a.tol_lambda:.0f} %)")
-    df, hist, C = analyser(h, a.t0, a.signe, a.prom, _liste(a.forcees), _liste(a.interdites))
+    df, hist, C = analyser(h, a.t0, a.signe, a.prom, _liste(a.forcees), _liste(a.interdites), multi=a.multi, duree_min=a.duree_min)
     if a.csv:
         df.to_csv(a.csv, index=False)
     if a.plot:
