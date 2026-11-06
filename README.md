@@ -212,6 +212,10 @@ Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAI
 - Un seul onglet est calculé à la fois (sélecteur d'onglets ; `st.tabs` exécutait les 11 onglets à chaque interaction), avec un message « Calcul en cours… ».
 - Le CSV est lu une fois (`st.cache_resource`, DataFrame partagé sans copie) et les dates sont lues sur les profils uniques (lecture ~2 s → ~0,5 s) ; les données ne sont ni échantillonnées ni arrondies.
 
+### Onglet 11 : deux méthodes de décomposition
+
+L'onglet 11 propose un choix **Gaussiennes** (`fissuration_gaussiennes.py`) ou **Exponentielle / shear lag** (`fissuration_cisaillement.py`). Un encadré « Théorie » (4 onglets : retrait commun, gaussiennes, exponentielle, comparaison) décrit chaque modèle et liste tous les paramètres modifiables avec leur aide (`theorie_fissuration.py`, specs dans `onglet_fissuration.py`). Méthode exponentielle : multi-échéances, glouton, fond, signe, plancher, preset, λ global (libre / auto / imposé), fissures forcées / interdites, largeur max, marge de bord, etc. Point d'entrée programmatique : `fissuration_cisaillement.analyser_segment(h, dates, preset, ...)` ; le script exporté (`script_generator.gen_fissuration_exp`) est autonome. Le shear lag coûte ~2,5 s par échéance et par segment.
+
 ### Fissuration par shear lag (`fissuration_cisaillement.py`)
 
 Variante du script gaussiennes avec le noyau physique d'une fissure, ε(x) = (w·λ/2)·exp(−λ|x−c|) (aire = w), moyenné analytiquement sur la jauge de 5 mm. Même résidu (mesure − retrait), mêmes étapes (centres issus de la dernière échéance, suivi à rebours), puis ajustement global avec wᵢ(t) non décroissant (somme cumulée d'incréments ≥ 0), λᵢ(t) lissé et centres communs. Option `--positif` : n'ajuste que la part du résidu au-dessus du retrait.

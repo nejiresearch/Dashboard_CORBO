@@ -10,6 +10,7 @@ import pandas as pd
 import inspect
 import fiber_ops
 import fit_retrait
+import fissuration_cisaillement
 import fissuration_gaussiennes
 
 # ------------------------------------------------------------------ en-tête commun
@@ -689,3 +690,92 @@ for seg, (tab, hist) in resultats.items():
     G.figure_surface(tab, CUBE, seg).show()           # surface 3D : temps x position x ouverture linéique
 """
     return _build(titre, corps)
+
+
+def gen_fissuration_exp(cube, segs, dates, theta, de, refit, params) -> str:
+    """Script autonome : retrait + décomposition exponentielle (shear lag). Embarque fit_retrait.py,
+    fissuration_gaussiennes.py (lecture des données) et fissuration_cisaillement.py ; `params` = réglages de l'onglet."""
+    titre = "Fissuration : retrait + décomposition exponentielle (shear lag)"
+    reglages = {k: v for k, v in params.items() if k != "groupe"}
+    lignes = "\n".join(f"    {k}={v!r}," for k, v in reglages.items())
+    sources = [inspect.getsource(m) for m in (fit_retrait, fissuration_gaussiennes, fissuration_cisaillement)]
+    for src in sources:
+        assert "'''" not in src, "le source contient ''' : impossible à embarquer"
+    src_fit, src_gauss, src_exp = sources
+    corps = f"""
+# ===================== Moteur de calcul (copie de fit_retrait.py, fissuration_gaussiennes.py, fissuration_cisaillement.py) =====================
+# Les trois modules sont embarqués pour que ce script soit autonome ; on peut aussi les remplacer par
+# `import fit_retrait as F` / `import fissuration_cisaillement as S` si les fichiers du dépôt sont disponibles.
+import sys, types
+import warnings
+warnings.filterwarnings("ignore")
+
+_dp = types.ModuleType("data_prep")                      # remplace data_prep.py : on réutilise le df déjà chargé
+_dp.CUBE_SIDE_M = CUBE_SIDE_M
+_dp.load_and_prepare = lambda *_: df
+sys.modules["data_prep"] = _dp
+
+_SRC_FIT = r'''{src_fit}'''
+
+_SRC_GAUSS = r'''{src_gauss}'''
+
+_SRC_EXP = r'''{src_exp}'''
+
+F = types.ModuleType("fit_retrait"); sys.modules["fit_retrait"] = F
+exec(_SRC_FIT, F.__dict__)
+G = types.ModuleType("fissuration_gaussiennes"); sys.modules["fissuration_gaussiennes"] = G
+exec(_SRC_GAUSS, G.__dict__)
+S = types.ModuleType("fissuration_cisaillement"); sys.modules["fissuration_cisaillement"] = S
+exec(_SRC_EXP, S.__dict__)
+
+# ===================== Paramètres (modifiables) =====================
+CUBE = {cube!r}
+SEGMENTS = {list(segs)!r}
+DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; le retrait est peu fiable avant ~28 j
+DE = {float(de)!r}                                    # D_e (m2/s)
+THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n (fit C12)
+REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n) sur le cube (~10 s)
+GROUPE_MM = {float(params.get("groupe", 8.0))!r}      # regroupement a posteriori des fissures voisines
+# Réglages de la méthode exponentielle (voir la théorie de l'onglet) :
+#   multi, glouton, fond, signe, plancher, preset, lam_global ('auto' ou m-1 ou None), forcees / interdites (mm, texte),
+#   largeur_max (1/lambda max, mm), a_max (mm), codmin (µm), plafond_mm, jauge, w_neg, dist_min, decalage_max, n_max, w_min,
+#   add_gain, marge_bord, prom_multi, duree_min, prom_facteur, tol_lambda
+PARAMS_EXP = dict(
+{lignes}
+)
+PARAMS_EXP["forcees"] = S._liste(PARAMS_EXP.get("forcees", ""))
+PARAMS_EXP["interdites"] = S._liste(PARAMS_EXP.get("interdites", ""))
+
+# ===================== Calcul =====================
+F.CSV = {{CUBE: CSV_PATH}}
+g_prep = F.prepare(CUBE, bin_mm=1)                    # données allégées (même pas que l'analyse de fissuration)
+if REAJUSTER_RETRAIT:
+    THETA = list(F.ajuster(F.prepare(CUBE), DE))
+print("retrait : N=%.0f k=%.4f a=%.0f n=%.2f" % tuple(THETA))
+
+resultats = {{}}
+for seg in SEGMENTS:
+    h = G.donnees_segment(CUBE, seg, np.array(THETA), DE, g=g_prep)
+    try:
+        tab, hist, _ = S.analyser_segment(h, dates=np.array(DATES), **PARAMS_EXP)
+    except (S.AucuneFissure, ValueError) as e:
+        print(seg, ":", e); continue
+    resultats[seg] = (S.groupes(tab, ecart_mm=GROUPE_MM), hist)
+    fin = tab[tab.t_j == tab.t_j.max()]
+    print(f"{{seg}} : {{fin['id'].nunique()}} fissures, Σw final = {{fin['w_um'].sum():.0f}} µm (aires : {{fin['w_aires_um'].sum():.0f}} µm)")
+    # tab.to_csv(f"fissuration_exp_{{CUBE}}_{{seg}}.csv", index=False)
+
+# ===================== Figures =====================
+for seg, (tab, hist) in resultats.items():
+    t_aff = max(hist)                                 # échéance affichée (à changer si besoin)
+    apply_publication_style(S.figure_profil(hist, tab, t_aff, CUBE, seg), xlabel="Position le long de la fibre (mm)",
+                            ylabel="µdef", title=f"{{CUBE}} {{seg}} — {{t_aff:.0f}} j").show()
+    apply_publication_style(S.figure_ouvertures(tab, CUBE, seg), xlabel="Temps écoulé (j)",
+                            ylabel="Ouverture w (µm)", title=f"{{CUBE}} {{seg}} — ouvertures").show()
+    S.figure_forme(tab, CUBE, seg).show()             # longueur de transfert 1/lambda et cœur a
+    apply_publication_style(S.figure_suivi(tab, CUBE, seg), xlabel="Position (mm)", ylabel="Temps écoulé (j)",
+                            title=f"{{CUBE}} {{seg}} — suivi des fissures").show()
+    S.figure_surface(tab, CUBE, seg).show()           # surface 3D : temps x position x ouverture linéique
+"""
+    return _build(titre, corps)
+
