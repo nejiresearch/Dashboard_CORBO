@@ -647,7 +647,7 @@ def figure_profil(hist, tab, t, cube, segment):
     for k, (_, r) in enumerate(d.iterrows()):
         ki = signe * noyau(xf, r["pos_mm"], r["w_um"], r["lambda_m1"] / 1000, r["coeur_a_mm"]); total += ki
         fig.add_trace(go.Scatter(x=xf, y=base, mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=xf, y=base + ki, mode="lines", line=dict(color=pal[k % len(pal)], width=1), fill="tonexty",
+        fig.add_trace(go.Scatter(x=xf, y=base + ki, mode="lines", line=dict(color=pal[int(r["id"]) % len(pal)], width=1), fill="tonexty",
                                  name=f"X={r['pos_mm']:.0f} mm : w={r['w_um']:.0f} µm, 1/λ={r['longueur_transfert_mm']:.1f} mm",
                                  hovertemplate="%{y:.0f} µε"))
     fig.add_trace(go.Scatter(x=xf, y=base + total, mode="lines", line=dict(color="crimson", width=2), name="retrait + fond + fissures"))
@@ -666,7 +666,7 @@ def figure_ouvertures(tab, cube, segment):
     for k, (i, g) in enumerate(tab.groupby("id")):
         g = g.sort_values("t_j")
         fig.add_trace(go.Scatter(x=g["t_j"], y=g["w_um"], mode="lines+markers", marker=dict(size=4),
-                                 line=dict(color=pal[k % len(pal)]), name=f"X={g['pos_mm'].iloc[0]:.0f} mm"))
+                                 line=dict(color=pal[int(i) % len(pal)]), name=f"X={g['pos_mm'].iloc[0]:.0f} mm"))
     fig.add_trace(go.Scatter(x=tab.groupby("t_j")["w_um"].sum().index, y=tab.groupby("t_j")["w_um"].sum().values,
                              mode="lines", line=dict(color="black", width=3), name="Σw modèle"))
     sa = tab.groupby("t_j")["w_aires_um"].sum()
@@ -693,7 +693,7 @@ def figure_suivi(tab, cube, segment):
     """Carte position × temps, taille des points ∝ ouverture."""
     import plotly.express as px
     d = tab.copy(); d["w_aff"] = d["w_um"].clip(lower=0.5)
-    fig = px.scatter(d, x="pos_mm", y="t_j", size="w_aff", color=d["id"].astype(str), size_max=22,
+    fig = px.scatter(d, x="pos_mm", y="t_j", size="w_aff", color=d["id"].astype(str), color_discrete_map={str(i): px.colors.qualitative.Plotly[int(i) % 10] for i in d["id"].unique()}, size_max=22,
                      hover_data={"w_um": ":.1f", "longueur_transfert_mm": ":.1f", "w_aff": False},
                      labels={"pos_mm": "Position le long de la fibre (mm)", "t_j": "Temps écoulé (j)", "color": "fissure"},
                      title=f"{cube} {segment} — suivi des fissures (taille ∝ ouverture)")
