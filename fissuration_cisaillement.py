@@ -26,6 +26,7 @@ Usage :
 """
 import argparse
 import warnings
+from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
@@ -439,6 +440,63 @@ def fixer_lambda(lam, tolerance=0.0):
     LAM_MIN, LAM_MAX, LAM_INIT = lam * (1 - tolerance) - 1e-9, lam * (1 + tolerance) + 1e-9, lam
 
 
+# paramètre de l'interface / CLI -> constante du module (réglages simples)
+REGLAGES_SIMPLES = dict(jauge="JAUGE_MM", prom_facteur="PROM_FACTEUR", prom_multi="PROM_MULTI", glouton="GLOUTON_MULTI",
+                        marge_bord="MARGE_BORD", a_max="A_MAX", codmin="COD_MIN", w_neg="W_NEG", plancher="PLANCHER",
+                        dist_min="DIST_MIN", decalage_max="DECALAGE_MAX", n_max="N_MAX", w_min="W_MIN", add_gain="ADD_GAIN",
+                        fond="FOND")
+_CONSTANTES = sorted(set(REGLAGES_SIMPLES.values()) | {"LAM_MIN", "LAM_MAX", "LAM_INIT", "PORTEE_MAX_MM", "PLAFOND_UM"})
+
+
+def configurer(preset=None, tol_lambda=0.0, largeur_max=None, plafond_mm=None, multi=False, **kw):
+    """Applique les réglages aux constantes du module (mêmes noms que les options de la ligne de commande).
+    Ordre : bornes de λ par défaut, jauge, preset, puis réglages individuels (qui l'emportent sur le preset).
+    largeur_max : 1/λ max en mm (None : 10 mm avec multi, sinon aucune ; 0 : aucune)."""
+    global LAM_MIN, LAM_MAX, LAM_INIT
+    g = globals()
+    LAM_MIN, LAM_MAX = 3.0 / g["PORTEE_MAX_MM"], 5.0 / g["JAUGE_MM"]
+    if kw.get("jauge"):
+        g["JAUGE_MM"] = kw["jauge"]; LAM_MAX = 5.0 / g["JAUGE_MM"]
+    if preset:
+        appliquer_preset(preset, tol_lambda)
+    for cle, nom in REGLAGES_SIMPLES.items():
+        if cle != "jauge" and kw.get(cle) is not None:
+            g[nom] = kw[cle]
+    if plafond_mm is not None:
+        g["PLAFOND_UM"] = 1000.0 * plafond_mm
+    lmax = largeur_max if largeur_max is not None else (LARGEUR_MULTI if multi else 0.0)
+    if lmax:
+        LAM_MIN = max(LAM_MIN, 1.0 / lmax)
+
+
+@contextmanager
+def reglages(**kw):
+    """Applique configurer(**kw) le temps du bloc, puis restaure les constantes (le module reste réutilisable)."""
+    g = globals()
+    avant = {k: g[k] for k in _CONSTANTES}
+    try:
+        configurer(**kw)
+        yield
+    finally:
+        g.update(avant)
+
+
+def lambda_global(h, valeur, tol_lambda=0.0, signe="+"):
+    """Impose un λ commun : valeur en m⁻¹ ou 'auto' (médiane de β sur les paires de fissures de la dernière échéance)."""
+    if valeur == "auto":
+        ech = h[h["temps_ecoule_j"] == h["temps_ecoule_j"].max()].sort_values("xb")
+        r = ech["r"].values.astype(float)
+        sg = signe_auto(r) if signe == "auto" else (1.0 if signe == "+" else -1.0)
+        p = estimer_beta(ech[ech["axe_mesure"].iloc[0]].values * 1000, sg * r)
+        if not p:
+            raise ValueError("aucune paire exploitable pour estimer β : donner λ en m⁻¹")
+        lam = float(np.median([q[2] for q in p]))
+    else:
+        lam = float(valeur) / 1000
+    fixer_lambda(lam, tol_lambda)
+    return lam
+
+
 def appliquer_preset(nom, tol_lambda=0.0):
     """Preset câble/pose : bornes de λ, de a (≤ A_CUBE_MM), du COD ; λ imposé si le preset donne 1/λ."""
     global LAM_MIN, LAM_MAX, A_MAX, PLAFOND_UM, COD_MIN, PORTEE_MAX_MM
@@ -451,13 +509,23 @@ def appliquer_preset(nom, tol_lambda=0.0):
 
 
 # ----------------------------------------------------------------------------- analyse complète
-def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), verbose=True, multi=False, duree_min=DUREE_MIN):
+class AucuneFissure(ValueError):
+    """Aucun candidat de fissure n'a été retenu à la dernière échéance."""
+
+
+def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), verbose=True, multi=False, duree_min=DUREE_MIN,
+             dates=None):
+    """dates : sous-ensemble d'échéances (jours) à analyser (défaut : toutes celles ≥ t0).
+    Retourne (tableau des fissures, hist, centres) ; hist[t] = (x, résidu, ajustement, mesure, retrait modèle) en µε."""
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
-    xs, rs = [], []
+    if dates is not None:
+        echeances = echeances[[bool(np.isclose(t, np.asarray(dates)).any()) for t in echeances]]
+    xs, rs, mesures, mods = [], [], [], []
     for t in echeances:
         q = h[h["temps_ecoule_j"] == t].sort_values("xb")
         xs.append(q[axe].values * 1000); rs.append(q["r"].values.astype(float))
+        mesures.append(q["eps"].values.astype(float)); mods.append(q["mod"].values.astype(float))
     sg = signe_auto(rs[-1]) if signe == "auto" else (1.0 if signe == "+" else -1.0)
     rs = [sg * r for r in rs]
     if verbose:
@@ -474,7 +542,7 @@ def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), v
         ext = candidats_multi(xs, rs, echeances, PROM_MULTI, duree_min, max(1.5 * pas, JAUGE_MM / 4, 3.0), interdites, verbose)
     C, W, L, A, b = detecter(xs[-1], rs[-1], prom, forcees, interdites, verbose, ext, glouton=(not multi) or GLOUTON_MULTI)
     if len(C) == 0:
-        raise SystemExit("aucune fissure détectée")
+        raise AucuneFissure("aucune fissure détectée")
     n, T = len(C), len(echeances)
     W0 = np.zeros((n, T)); L0 = np.tile(L[:, None], (1, T)); A0 = np.tile(A[:, None], (1, T)); W0[:, -1] = W
     B0 = np.full(T, b)
@@ -487,11 +555,11 @@ def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), v
         fit = modele(xs[k], Cf, Wf[:, k], Lf, Af[:, k], Bf[k])
         rmse = float(np.sqrt(np.mean((fit - rs[k]) ** 2)))
         w_air = aires(xs[k], rs[k], Cf, fond_initial(xs[k], rs[k]))     # recoupement indépendant
-        hist[t] = (xs[k], sg * rs[k], sg * fit)
+        hist[t] = (xs[k], sg * rs[k], sg * fit, mesures[k], mods[k])
         for i in range(n):
             lignes.append(dict(t_j=t, id=i, pos_mm=Cf[i], w_um=Wf[i, k], w_aires_um=w_air[i], lambda_m1=1000 * Lf[i],
                                longueur_transfert_mm=1 / Lf[i], coeur_a_mm=Af[i, k], fond_ue=Bf[k],
-                               pic_ue=amplitude(Wf[i, k], Af[i, k], Lf[i]), plafond=bool(Wf[i, k] >= 0.99 * PLAFOND_UM)))
+                               pic_ue=amplitude(Wf[i, k], Af[i, k], Lf[i]), plafond=bool(Wf[i, k] >= 0.99 * PLAFOND_UM), signe=sg))
         if verbose:
             print(f"{t:6.1f} j : {n} fissures, RMSE={rmse:4.0f} µε, fond={Bf[k]:5.0f} µε, "
                   f"Σw={Wf[:, k].sum():.0f} µm (aires : {w_air.sum():.0f} µm)")
@@ -504,7 +572,7 @@ def tracer(cube, seg, h, df, hist, chemin):
     ts = sorted(hist); idx = np.unique(np.linspace(0, len(ts) - 1, 4).astype(int)); sel = [ts[i] for i in idx]
     fig, ax = plt.subplots(2, 3, figsize=(18, 9)); ax = ax.ravel()
     for a, t in zip(ax, sel):
-        x, r, fit = hist[t]
+        x, r, fit = hist[t][:3]
         a.plot(x, r, "k", lw=1, label="mesure − retrait"); a.plot(x, fit, "r", label="shear lag (+ fond)")
         a.axhline(0, color="gray", lw=.5); a.set_title(f"{cube} {seg} — {t:.0f} j"); a.set_xlabel("position (mm)"); a.set_ylabel("µε")
     ax[0].legend(fontsize=7)
@@ -522,12 +590,134 @@ def tracer(cube, seg, h, df, hist, chemin):
     fig.tight_layout(); fig.savefig(chemin, dpi=110); plt.close(fig)
 
 
+def analyser_segment(h, dates=None, preset=None, tol_lambda=0.0, lam_global=None, signe="+", forcees=(), interdites=(),
+                     multi=True, duree_min=None, prom=None, t0=0.0, **reglage):
+    """Point d'entrée du dashboard et des scripts exportés : applique les réglages (constantes du module, restaurées ensuite)
+    puis lance analyser(). `reglage` : largeur_max, plafond_mm, jauge, prom_facteur, prom_multi, glouton, marge_bord, a_max,
+    codmin, w_neg, plancher, dist_min, decalage_max, n_max, w_min, add_gain, fond (voir configurer).
+    lam_global : None (λ libre), 'auto' ou valeur en m⁻¹. Avec un preset, ses bornes (a max, COD min/max) remplacent celles données.
+    Non réentrant (modifie des constantes du module). Lève AucuneFissure / ValueError."""
+    if preset:
+        for k in ("a_max", "codmin", "plafond_mm"):
+            reglage.pop(k, None)
+    with reglages(preset=preset, tol_lambda=tol_lambda, multi=multi, **reglage):
+        if lam_global is not None:
+            lambda_global(h, lam_global, tol_lambda, signe)
+        return analyser(h, t0, signe, prom, list(forcees), list(interdites), verbose=False, multi=multi,
+                        duree_min=DUREE_MIN if duree_min is None else duree_min,
+                        dates=None if dates is None else np.asarray(dates))
+
+
+# ----------------------------------------------------------------------------- figures Plotly (dashboard / notebook)
+def groupes(tab, ecart_mm=8.0):
+    """Regroupe a posteriori les fissures voisines (liaison simple sur les centres) : colonne 'groupe'."""
+    cen = tab.groupby("id")["pos_mm"].first().sort_values()
+    grp, g, prec = {}, 0, None
+    for i, c in cen.items():
+        if prec is not None and c - prec > ecart_mm:
+            g += 1
+        grp[i] = g; prec = c
+    tab = tab.copy(); tab["groupe"] = tab["id"].map(grp)
+    return tab
+
+
+def figure_profil(hist, tab, t, cube, segment):
+    """Mesure, retrait modèle, fond, noyau de chaque fissure (appuyé sur retrait + fond) et somme, à l'échéance t."""
+    import plotly.express as px
+    import plotly.graph_objects as go
+    ts = np.array(sorted(hist)); t = ts[np.argmin(abs(ts - t))]
+    x, _, _, mesure, mod = hist[t]
+    d = tab[np.isclose(tab["t_j"], t)]
+    signe = float(d["signe"].iloc[0]) if len(d) else 1.0
+    o = np.argsort(x); x, mesure, mod = x[o], mesure[o], mod[o]
+    xf = np.linspace(x.min(), x.max(), 1000); mf = np.interp(xf, x, mod); pal = px.colors.qualitative.Plotly
+    base = mf + signe * (d["fond_ue"].iloc[0] if len(d) else 0.0)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=mesure, mode="lines", line=dict(color="black", width=1.5), name="mesure"))
+    fig.add_trace(go.Scatter(x=xf, y=mf, mode="lines", line=dict(color="royalblue", dash="dash", width=2.5), name="retrait modèle"))
+    fig.add_trace(go.Scatter(x=xf, y=base, mode="lines", line=dict(color="gray", dash="dot", width=1.5), name="retrait + fond b(t)"))
+    total = np.zeros_like(xf)
+    for k, (_, r) in enumerate(d.iterrows()):
+        ki = signe * noyau(xf, r["pos_mm"], r["w_um"], r["lambda_m1"] / 1000, r["coeur_a_mm"]); total += ki
+        fig.add_trace(go.Scatter(x=xf, y=base, mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=xf, y=base + ki, mode="lines", line=dict(color=pal[k % len(pal)], width=1), fill="tonexty",
+                                 name=f"X={r['pos_mm']:.0f} mm : w={r['w_um']:.0f} µm, 1/λ={r['longueur_transfert_mm']:.1f} mm",
+                                 hovertemplate="%{y:.0f} µε"))
+    fig.add_trace(go.Scatter(x=xf, y=base + total, mode="lines", line=dict(color="crimson", width=2), name="retrait + fond + fissures"))
+    fig.update_layout(title=f"{cube} {segment} — {t:.1f} j : {len(d)} fissures, Σw = {d['w_um'].sum():.0f} µm "
+                            f"(aires : {d['w_aires_um'].sum():.0f} µm)",
+                      xaxis_title="Position le long de la fibre (mm)", yaxis_title="µdef", height=520, legend=dict(font=dict(size=9)))
+    return fig
+
+
+def figure_ouvertures(tab, cube, segment):
+    """Ouverture w_i(t) de chaque fissure, Σw (modèle) et Σw (méthode des aires, recoupement indépendant)."""
+    import plotly.express as px
+    import plotly.graph_objects as go
+    pal = px.colors.qualitative.Plotly
+    fig = go.Figure()
+    for k, (i, g) in enumerate(tab.groupby("id")):
+        g = g.sort_values("t_j")
+        fig.add_trace(go.Scatter(x=g["t_j"], y=g["w_um"], mode="lines+markers", marker=dict(size=4),
+                                 line=dict(color=pal[k % len(pal)]), name=f"X={g['pos_mm'].iloc[0]:.0f} mm"))
+    fig.add_trace(go.Scatter(x=tab.groupby("t_j")["w_um"].sum().index, y=tab.groupby("t_j")["w_um"].sum().values,
+                             mode="lines", line=dict(color="black", width=3), name="Σw modèle"))
+    sa = tab.groupby("t_j")["w_aires_um"].sum()
+    fig.add_trace(go.Scatter(x=sa.index, y=sa.values, mode="lines", line=dict(color="black", width=2, dash="dash"), name="Σw aires"))
+    fig.update_layout(title=f"{cube} {segment} — ouverture de chaque fissure, somme et recoupement par aires",
+                      xaxis_title="Temps écoulé (j)", yaxis_title="Ouverture w (µm)", height=420)
+    return fig
+
+
+def figure_forme(tab, cube, segment):
+    """Forme du noyau à la dernière échéance : longueur de transfert 1/λ et demi-largeur du cœur a, par fissure."""
+    import plotly.graph_objects as go
+    d = tab[tab["t_j"] == tab["t_j"].max()]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=d["pos_mm"], y=d["coeur_a_mm"], width=1.5, name="cœur a (mm)"))
+    fig.add_trace(go.Scatter(x=d["pos_mm"], y=d["longueur_transfert_mm"], mode="markers", marker=dict(color="crimson", size=9),
+                             name="1/λ (mm)"))
+    fig.update_layout(title=f"{cube} {segment} — forme des fissures (dernière échéance)", xaxis_title="Position (mm)",
+                      yaxis_title="mm", height=360)
+    return fig
+
+
+def figure_suivi(tab, cube, segment):
+    """Carte position × temps, taille des points ∝ ouverture."""
+    import plotly.express as px
+    d = tab.copy(); d["w_aff"] = d["w_um"].clip(lower=0.5)
+    fig = px.scatter(d, x="pos_mm", y="t_j", size="w_aff", color=d["id"].astype(str), size_max=22,
+                     hover_data={"w_um": ":.1f", "longueur_transfert_mm": ":.1f", "w_aff": False},
+                     labels={"pos_mm": "Position le long de la fibre (mm)", "t_j": "Temps écoulé (j)", "color": "fissure"},
+                     title=f"{cube} {segment} — suivi des fissures (taille ∝ ouverture)")
+    fig.update_layout(height=420, showlegend=False)
+    return fig
+
+
+def figure_surface(tab, cube, segment, n_x=200, n_t_max=60):
+    """Surface X = temps, Y = position, Z = ouverture linéique Σ noyau_i·1e-3 (µm/mm) ; ∫ Z dx = Σw(t)."""
+    import plotly.graph_objects as go
+    ts = np.sort(tab["t_j"].unique())
+    if len(ts) > n_t_max:
+        ts = ts[np.unique(np.linspace(0, len(ts) - 1, n_t_max).round().astype(int))]
+    xs = np.linspace(max(tab["pos_mm"].min() - 15, 0), min(tab["pos_mm"].max() + 15, 100.0), n_x)
+    Z = np.zeros((len(xs), len(ts)))
+    for k, t in enumerate(ts):
+        for _, r in tab[tab["t_j"] == t].iterrows():
+            Z[:, k] += noyau(xs, r["pos_mm"], r["w_um"], r["lambda_m1"] / 1000, r["coeur_a_mm"]) * 1e-3
+    fig = go.Figure(go.Surface(x=ts, y=xs, z=Z, colorscale="Inferno", colorbar=dict(title="µm/mm"),
+                               hovertemplate="t=%{x:.1f} j<br>X=%{y:.1f} mm<br>w'=%{z:.2f} µm/mm<extra></extra>"))
+    fig.update_layout(title=f"{cube} {segment} — ouverture linéique des fissures", height=560,
+                      scene=dict(xaxis_title="Temps écoulé (j)", yaxis_title="Position fibre (mm)", zaxis_title="Ouverture (µm/mm)"),
+                      margin=dict(l=0, r=0, t=40, b=0))
+    return fig
+
+
 def _liste(s):
     return [float(v) for v in s.replace(";", ",").split(",") if v.strip()] if s else []
 
 
 def main():
-    global MARGE_BORD, GLOUTON_MULTI, PROM_MULTI, JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12")
     ap.add_argument("--segment", default="s14")
@@ -558,45 +748,21 @@ def main():
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
     warnings.filterwarnings("ignore")
-    if a.jauge:
-        JAUGE_MM = a.jauge
-    if a.preset:
-        appliquer_preset(a.preset, a.tol_lambda)
-    if a.codmin is not None:
-        COD_MIN = a.codmin
-    if a.plafond is not None:
-        PLAFOND_UM = 1000 * a.plafond
-    GLOUTON_MULTI = a.glouton
-    if a.marge_bord is not None:
-        MARGE_BORD = a.marge_bord
-    if a.prom_multi:
-        PROM_MULTI = a.prom_multi
-    if a.a_max is not None:
-        A_MAX = a.a_max
-    lmax = a.largeur_max if a.largeur_max is not None else (LARGEUR_MULTI if a.multi else 0.0)
-    if lmax:
-        LAM_MIN = max(LAM_MIN, 1.0 / lmax)
-    if a.plancher:
-        PLANCHER = a.plancher
-    if a.sans_fond:
-        FOND = False
-    if a.w_neg is not None:
-        W_NEG = a.w_neg
-    if a.prom_facteur is not None:
-        PROM_FACTEUR = a.prom_facteur
+    configurer(preset=a.preset, tol_lambda=a.tol_lambda, largeur_max=a.largeur_max, plafond_mm=a.plafond, multi=a.multi,
+               jauge=a.jauge, prom_facteur=a.prom_facteur, prom_multi=a.prom_multi, glouton=a.glouton or None,
+               marge_bord=a.marge_bord, a_max=a.a_max, codmin=a.codmin, w_neg=a.w_neg, plancher=a.plancher,
+               fond=False if a.sans_fond else None)
     h = donnees_segment(a.cube, a.segment, a.theta, a.de)
     if a.lambda_global:
-        if a.lambda_global == "auto":
-            ech = h[h["temps_ecoule_j"] == h["temps_ecoule_j"].max()].sort_values("xb")
-            r = ech["r"].values.astype(float)
-            p = estimer_beta(ech[ech["axe_mesure"].iloc[0]].values * 1000, signe_auto(r) * r)
-            if not p:
-                raise SystemExit("aucune paire exploitable pour estimer β : donner --lambda-global en m⁻¹")
-            lam = float(np.median([q[2] for q in p]))
-        else:
-            lam = float(a.lambda_global) / 1000
-        fixer_lambda(lam, a.tol_lambda); print(f"λ global = {1000 * lam:.0f} m⁻¹ (± {100 * a.tol_lambda:.0f} %)")
-    df, hist, C = analyser(h, a.t0, a.signe, a.prom, _liste(a.forcees), _liste(a.interdites), multi=a.multi, duree_min=a.duree_min)
+        try:
+            lam = lambda_global(h, a.lambda_global, a.tol_lambda, a.signe)
+        except ValueError as e:
+            raise SystemExit(str(e))
+        print(f"λ global = {1000 * lam:.0f} m⁻¹ (± {100 * a.tol_lambda:.0f} %)")
+    try:
+        df, hist, C = analyser(h, a.t0, a.signe, a.prom, _liste(a.forcees), _liste(a.interdites), multi=a.multi, duree_min=a.duree_min)
+    except AucuneFissure as e:
+        raise SystemExit(str(e))
     if a.csv:
         df.to_csv(a.csv, index=False)
     if a.plot:
