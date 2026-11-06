@@ -59,6 +59,7 @@ ADD_GAIN = 0.04                  # gain relatif minimal du SSE pour ajouter une 
 PROM_MULTI = 1.5                 # facteur de bruit pour la détection multi-échéances
 LARGEUR_MULTI = 10.0             # mm : 1/λ max par défaut avec --multi (évite les fissures fantômes de fond)
 GLOUTON_MULTI = False            # complément glouton après --multi (lent, ajoute des fissures de bord)
+MARGE_BORD = 3.0                 # mm : aucune fissure détectée à moins de cette distance des extrémités de la fibre (effets de bord)
 DUREE_MIN = 10.0                 # j : durée minimale d'une trajectoire de pic
 W_MIN = 5.0                      # µm : ouverture initiale minimale d'un candidat
 DIST_MIN = 2.0                   # mm : deux centres plus proches sont fusionnés (le plus faible est retiré)
@@ -245,8 +246,8 @@ def ajuster_date(x, cible, C, W, L, A, libres, b0=0.0, avec_fond=None):
 
     bb = (-FOND_MAX, FOND_MAX) if avec_fond else (-1e-6, 1e-6)
     q0 = np.r_[W, L, A, b0 if avec_fond else 0.0, C0[fi]]
-    lo = np.r_[np.zeros(n), np.full(n, LAM_MIN), np.zeros(n), bb[0], np.maximum(C0[fi] - DECALAGE_MAX, x.min())]
-    hi = np.r_[np.full(n, PLAFOND_UM), np.full(n, LAM_MAX), np.full(n, max(A_MAX, 1e-6)), bb[1], np.minimum(C0[fi] + DECALAGE_MAX, x.max())]
+    lo = np.r_[np.zeros(n), np.full(n, LAM_MIN), np.zeros(n), bb[0], np.minimum(np.maximum(C0[fi] - DECALAGE_MAX, x.min() + MARGE_BORD), C0[fi] - 1e-6)]
+    hi = np.r_[np.full(n, PLAFOND_UM), np.full(n, LAM_MAX), np.full(n, max(A_MAX, 1e-6)), bb[1], np.maximum(np.minimum(C0[fi] + DECALAGE_MAX, x.max() - MARGE_BORD), C0[fi] + 1e-6)]
     q0 = np.clip(q0, lo + 1e-9, hi - 1e-9)
     s = least_squares(f, q0, bounds=(lo, hi), max_nfev=80,
                       x_scale=np.r_[np.full(n, 20.0), np.full(n, 0.05), np.full(n, 2.0), 500.0, np.full(len(fi), 2.0)])
@@ -301,7 +302,9 @@ def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False, cand_ext
     prom = PROM_FACTEUR * sigma if not prom else prom
     rl = lisser(r, pas)
     b0 = fond_initial(x, r)
-    interdit = lambda c: any(abs(c - i) < tol for i in interdites)
+    xmin, xmax = float(x.min()), float(x.max())
+    bord = lambda c: c < xmin + MARGE_BORD or c > xmax - MARGE_BORD
+    interdit = lambda c: any(abs(c - i) < tol for i in interdites) or bord(c)
     cand = [c for c in x[find_peaks(rl, prominence=prom)[0]] if not interdit(c)]
     forcees = [f for f in forcees if f is not None]
     for f in forcees:
@@ -421,8 +424,8 @@ def global_regularise(xs, rs, C0, W0, L0, A0, B0):
 
     q0 = np.r_[D0.ravel(), L0, DA0.ravel(), C0, B0]
     bb = FOND_MAX if FOND else 1e-6
-    lo = np.r_[np.zeros(nT), np.full(n, LAM_MIN), np.zeros(nT), np.maximum(C0 - DECALAGE_MAX, xs[0].min()), np.full(T, -bb)]
-    hi = np.r_[np.full(nT, PLAFOND_UM), np.full(n, LAM_MAX), np.full(nT, max(A_MAX, 1e-6)), np.minimum(C0 + DECALAGE_MAX, xs[0].max()), np.full(T, bb)]
+    lo = np.r_[np.zeros(nT), np.full(n, LAM_MIN), np.zeros(nT), np.minimum(np.maximum(C0 - DECALAGE_MAX, xs[0].min() + MARGE_BORD), C0 - 1e-6), np.full(T, -bb)]
+    hi = np.r_[np.full(nT, PLAFOND_UM), np.full(n, LAM_MAX), np.full(nT, max(A_MAX, 1e-6)), np.maximum(np.minimum(C0 + DECALAGE_MAX, xs[0].max() - MARGE_BORD), C0 + 1e-6), np.full(T, bb)]
     q0 = np.clip(q0, lo + 1e-9, hi - 1e-9)
     s = least_squares(f, q0, bounds=(lo, hi), jac=jac, max_nfev=60,
                       x_scale=np.r_[np.full(nT, 5.0), np.full(n, 0.05), np.full(nT, 2.0), np.full(n, 2.0), np.full(T, 500.0)])
@@ -524,7 +527,7 @@ def _liste(s):
 
 
 def main():
-    global GLOUTON_MULTI, PROM_MULTI, JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
+    global MARGE_BORD, GLOUTON_MULTI, PROM_MULTI, JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12")
     ap.add_argument("--segment", default="s14")
@@ -550,6 +553,7 @@ def main():
     ap.add_argument("--multi", action="store_true", help="détection des centres sur toutes les échéances (trajectoires de pics)")
     ap.add_argument("--prom-multi", type=float, default=None, help=f"facteur de bruit pour la détection multi (défaut {PROM_MULTI})")
     ap.add_argument("--duree-min", type=float, default=DUREE_MIN, help="durée minimale (j) d'une trajectoire validée")
+    ap.add_argument("--marge-bord", type=float, default=None, metavar="mm", help=f"exclut les fissures détectées à moins de cette distance des extrémités (défaut {MARGE_BORD:g} ; 0 = aucune)")
     ap.add_argument("--glouton", action="store_true", help="avec --multi : ajoute aussi le complément glouton (lent)")
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
@@ -563,6 +567,8 @@ def main():
     if a.plafond is not None:
         PLAFOND_UM = 1000 * a.plafond
     GLOUTON_MULTI = a.glouton
+    if a.marge_bord is not None:
+        MARGE_BORD = a.marge_bord
     if a.prom_multi:
         PROM_MULTI = a.prom_multi
     if a.a_max is not None:
