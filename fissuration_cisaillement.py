@@ -1,15 +1,25 @@
 """
-Quantification de la fissuration par transfert de déformation exponentiel (shear lag) sur les données CORBO.
+Quantification de la fissuration par transfert de déformation (shear lag) sur les données CORBO,
+selon la méthodologie d'OBRstudio (v1.6.19), adaptée à nos cubes de 10 cm.
 
-Adaptation de fissuration_shear_lag.py (qui ne tourne que sur des données synthétiques) :
+Adaptation de fissuration_cisaillement.py :
   - données réelles : résidu r(x, t) = ε_mesuré − retrait (fit_retrait.py), comme fissuration_gaussiennes.py ;
-  - noyau d'une fissure d'ouverture w au centre c :  ε(x) = (w·λ/2)·exp(−λ|x−c|)   (aire = w),
-    MOYENNÉ sur la jauge de l'OBR (5 mm) de façon analytique ;
-  - ajustement par moindres carrés (least_squares, jacobien creux), w_i(t) non décroissant par construction,
-    λ_i(t) lissé dans le temps, centres communs à toutes les dates ;
-  - centres déterminés sur la DERNIÈRE échéance (ajout glouton), puis suivi à rebours.
+  - noyau d'une fissure d'ouverture w (COD) au centre c : profil EXPONENTIEL-TRIANGULAIRE (modèle OBRstudio)
+        ε(s) = P (1 − λ|s|/(1+λa))        pour |s| ≤ a   (« cœur » en glissement, décroissance linéaire)
+        ε(s) = P/(1+λa) · exp(−λ(|s|−a))  pour |s| > a   (transfert exponentiel)
+    avec a = 0 on retrouve le noyau exponentiel pur. COD = ∫ε dx = (2P/λ)(1+s+s²/2)/(1+s), s = λa ;
+    on paramètre par w (COD) et on en déduit P. Le noyau est MOYENNÉ sur la jauge de l'OBR de façon analytique ;
+  - FOND : un décalage b(t) (ε_fond, µε) par échéance est ajusté avec les fissures (écart global du retrait) ;
+  - DÉTECTION comme OBRstudio : pics de proéminence ≥ PROM_FACTEUR × bruit (auto), ouverture initiale = aire du profil
+    au-dessus d'un plancher, puis affinage par moindres carrés ; complément glouton ;
+  - méthode « aires » conservée comme recoupement indépendant (colonne w_aires_um) ;
+  - élagage des fissures d'ouverture < COD mini, plafond de COD, bornes de λ et de a ;
+  - fissures forcées / interdites, presets « câble / pose » ;
+  - global : w_i(t) non décroissant, a_i(t) non décroissant, λ_i CONSTANT dans le temps (propriété de l'interface),
+    b(t) libre, centres communs à toutes les dates ;
+  - centres déterminés sur la DERNIÈRE échéance, puis suivi à rebours.
 
-Unités : x en mm, λ en 1/mm (affiché en m⁻¹), w en µm, ε en µε.
+Unités : x en mm, λ en 1/mm (affiché en m⁻¹), a en mm, w en µm, ε en µε.
 
 Usage :
     python fissuration_cisaillement.py --cube C12 --segment s14 --plot s14_sl.png --csv s14_sl.csv
@@ -20,59 +30,112 @@ import warnings
 import numpy as np
 import pandas as pd
 from scipy.optimize import brentq, least_squares
-from scipy.signal import find_peaks
+from scipy.signal import argrelmin, find_peaks
 from scipy.sparse import lil_matrix
+
+_trapz = getattr(np, "trapezoid", None) or np.trapz   # NumPy ≥ 2 : trapezoid
 
 import fit_retrait as F
 from fissuration_gaussiennes import donnees_segment, THETA_DEFAUT, T0_DEFAUT
 
+# ----------------------------------------------------------------------------- réglages
 JAUGE_MM = 5.0
-LAM_MIN, LAM_MAX = 0.01, 0.5     # 1/mm  (10–500 m⁻¹ : longueur de transfert 2–100 mm)
+PORTEE_MAX_MM = 300.0            # portée max du transfert : λ ≥ 3/portée
+LAM_MIN = 3.0 / PORTEE_MAX_MM    # 1/mm
+LAM_MAX = 5.0 / JAUGE_MM         # 1/mm : λ ≤ 5/jauge
 LAM_INIT = 0.1
-LAMBDA_LISSAGE = 400.0           # pénalité sur la variation de λ entre échéances (en µε par 1/mm)
-ADD_GAIN = 0.04                  # gain relatif minimal du SSE pour ajouter une fissure
-W_MIN = 5.0                      # µm : ouverture minimale d'une fissure ajoutée
-DIST_MIN = 2.0                   # mm
+A_CUBE_MM = 12.0                 # le cube fait 100 mm : un cœur plus large se comporterait comme une gaussienne de fond
+A_MAX = A_CUBE_MM                # mm : demi-largeur max du cœur
+A_INIT = 2.0
+COD_MIN = 2.0                    # µm : ouverture minimale d'une fissure (élagage)
+PLAFOND_UM = 5000.0              # µm : COD maximal
+PROM_FACTEUR = 2.0               # proéminence auto = facteur × bruit (MAD ≈ rugosité du signal, pas bruit instrumental pur)
+PLANCHER = "local"               # "local" (quart bas des creux) | "zero"
+FOND = True                      # ajuste un décalage b(t) par échéance
+FOND_MAX = 3e4                   # µε
+W_NEG = 0.3                      # poids des résidus où la mesure est SOUS le modèle (creux non modélisables)
+ADD_GAIN = 0.04                  # gain relatif minimal du SSE pour ajouter une fissure (complément glouton)
+W_MIN = 5.0                      # µm : ouverture initiale minimale d'un candidat
+DIST_MIN = 2.0                   # mm : deux centres plus proches sont fusionnés (le plus faible est retiré)
 DECALAGE_MAX = 4.0               # mm
 N_MAX = 25
 
+# Presets « câble / pose » (OBRstudio). inv_lambda_mm : 1/λ imposé du câble. Le cœur est borné à A_CUBE_MM.
+PRESETS = {
+    "peek_cobra_beton":       dict(inv_lambda_mm=10.5, coeur_max_mm=200, portee_max_mm=300, plafond_mm=2.0, cod_min_um=10, jauge_mm=4),
+    "polyimide_nue_beton":    dict(coeur_max_mm=25, portee_max_mm=30, plafond_mm=0.5, cod_min_um=2, jauge_mm=1),
+    "polyimide_collee_epoxy": dict(coeur_max_mm=5, portee_max_mm=10, plafond_mm=0.2, cod_min_um=0.5, jauge_mm=0.5),
+}
 
-def _G(s, lam):
-    return np.sign(s) * (1.0 - np.exp(-lam * np.abs(s))) / lam
+
+# ----------------------------------------------------------------------------- modèle exponentiel-triangulaire
+def _profil(s, P, a, lam):
+    s = np.abs(s)
+    u = 1.0 + lam * a
+    return np.where(s <= a, P * (1.0 - lam * s / u), P / u * np.exp(-lam * (s - a)))
 
 
-def noyau(x, c, w, lam, jauge=JAUGE_MM):
-    """Déformation (µε) vue par la fibre pour une fissure (c, w, λ), moyennée sur la jauge."""
+def _prim(e, P, a, lam):
+    """Primitive (depuis −∞) du profil centré : ∫_{-∞}^{e} ε(s) ds, en µε·mm."""
+    e = np.asarray(e, dtype=float)
+    u = 1.0 + lam * a
+    c = lam * P / u
+    i = P / (lam * u)
+    l = i + P * a - c * a * a / 2.0
+    out = np.empty_like(e)
+    m1 = e <= -a
+    m2 = (e > -a) & (e <= 0)
+    m3 = (e > 0) & (e <= a)
+    m4 = e > a
+    out[m1] = i * np.exp(lam * (e[m1] + a))
+    out[m2] = i + P * (e[m2] + a) + c * (e[m2] ** 2 - a * a) / 2.0
+    out[m3] = l + P * e[m3] - c * e[m3] ** 2 / 2.0
+    out[m4] = l + P * a - c * a * a / 2.0 + i * (1.0 - np.exp(-lam * (e[m4] - a)))
+    return out
+
+
+def amplitude(w, a, lam):
+    """Pic P (µε) d'une fissure d'ouverture w (µm)."""
+    s = lam * a
+    return 500.0 * w * lam * (1.0 + s) / (1.0 + s + s * s / 2.0)
+
+
+def noyau(x, c, w, lam, a=0.0, jauge=None):
+    """Déformation (µε) vue par la fibre pour une fissure (c, w, λ, a), moyennée sur la jauge."""
+    jauge = JAUGE_MM if jauge is None else jauge
+    P = amplitude(w, a, lam)
     s = x - c
     if jauge <= 0:
-        return 500.0 * w * lam * np.exp(-lam * np.abs(s))
-    return 500.0 * w * lam * (_G(s + jauge / 2, lam) - _G(s - jauge / 2, lam)) / jauge
+        return _profil(s, P, a, lam)
+    return (_prim(s + jauge / 2, P, a, lam) - _prim(s - jauge / 2, P, a, lam)) / jauge
 
 
-def modele(x, C, W, L):
-    y = np.zeros_like(x, dtype=float)
-    for c, w, l in zip(C, W, L):
-        y += noyau(x, c, w, l)
+def modele(x, C, W, L, A=None, b=0.0):
+    """Somme des noyaux + fond b (µε)."""
+    A = np.zeros(len(C)) if A is None else A
+    y = np.full(len(x), float(b))
+    for c, w, l, a in zip(C, W, L, A):
+        y += noyau(x, c, w, l, a)
     return y
 
 
+def _pond(f):
+    """Pondération asymétrique : mesure sous le modèle (f > 0) pèse W_NEG."""
+    return np.where(f > 0, np.sqrt(W_NEG) * f, f)
+
+
+# ----------------------------------------------------------------------------- inversion analytique d'une paire
 def _creux(beta, E1, E3, d):
-    """E2 prédit par la superposition de deux fissures (E1, E3 : pics, d : distance), β en 1/mm."""
     q = np.exp(-beta * d)
     return 2 * np.exp(-beta * d / 2) / (1 - q ** 2) * np.sqrt(max((E1 - E3 * q) * (E3 - E1 * q), 0.0))
 
 
 def extraire_paire(E1, E2, E3, d):
-    """Inversion analytique d'une paire de fissures rapprochées (modèle shear lag, sans moyenne sur la jauge).
-
-    ε(x) = δ1·β·e^(-β|x-x1|) + δ2·β·e^(-β|x-x2|) ;  E1 = ε(x1), E3 = ε(x2), E2 = ε(x_m) = creux.
-    Équation scalaire en β :  E2 = 2e^(-βd/2)/(1-e^(-2βd))·√((E1-E3e^(-βd))(E3-E1e^(-βd))), puis
-    δ1 = (E1-E3e^(-βd))/(β(1-e^(-2βd))),  δ2 = (E3-E1e^(-βd))/(β(1-e^(-2βd))).
-    Unités : E en µε, d en mm, β en 1/mm, δ (= COD/2) en µm. Retourne (β, δ1, δ2) ou None (pas de solution :
-    creux trop haut/bas, ou pics non positifs). On prend la plus grande racine (branche décroissante)."""
+    """Inversion analytique d'une paire de fissures rapprochées (noyau exponentiel pur, a = 0, sans moyenne sur la jauge).
+    Unités : E en µε, d en mm, β en 1/mm, δ (= COD/2) en µm. Retourne (β, δ1, δ2) ou None."""
     if min(E1, E2, E3) <= 0 or E2 >= min(E1, E3) or d <= 0:
         return None
-    b_lo = np.log(max(E1, E3) / min(E1, E3)) / d + 1e-9      # δ1, δ2 > 0
+    b_lo = np.log(max(E1, E3) / min(E1, E3)) / d + 1e-9
     b = np.geomspace(b_lo, max(b_lo, 1e-3) * 1e4 + 50 / d, 800)
     g = np.array([_creux(x, E1, E3, d) - E2 for x in b])
     k = np.where((g[:-1] > 0) & (g[1:] <= 0))[0]
@@ -84,11 +147,10 @@ def extraire_paire(E1, E2, E3, d):
 
 
 def estimer_beta(x, r, sigma=None, d_min=4.0, d_max=60.0, verbose=False):
-    """β par paires de pics voisins du résidu (lissé sur ≈ jauge). Retourne la liste des (x1, x2, β, COD1, COD2)."""
+    """β par paires de pics voisins du résidu lissé. Retourne la liste des (x1, x2, β, COD1, COD2)."""
     sigma = bruit_mad(r) if sigma is None else sigma
     pas = float(np.median(np.diff(x)))
-    n = max(int(round(JAUGE_MM / pas)), 1)
-    rl = np.convolve(r, np.ones(n) / n, mode="same")
+    rl = lisser(r, pas)
     pics, _ = find_peaks(rl, prominence=sigma)
     out = []
     for a, b in zip(pics[:-1], pics[1:]):
@@ -104,188 +166,360 @@ def estimer_beta(x, r, sigma=None, d_min=4.0, d_max=60.0, verbose=False):
     return out
 
 
+# ----------------------------------------------------------------------------- bruit, signe, lissage, plancher, aires
 def bruit_mad(r):
-    """Bruit court terme : MAD des différences secondes (insensible aux grandes structures)."""
+    """MAD des différences secondes (rugosité court terme ; surestime le bruit instrumental pur)."""
     d2 = r[2:] - 2 * r[1:-1] + r[:-2]
     return 1.4826 * np.median(np.abs(d2 - np.median(d2))) / np.sqrt(6)
 
 
-def ajuster_date(x, cible, C, W, L, libres):
+def signe_auto(r):
+    """+1 si le résidu dépasse plus au-dessus qu'au-dessous de sa médiane (déconseillé : la physique impose +)."""
+    d = r[np.isfinite(r)] - np.median(r[np.isfinite(r)])
+    return 1.0 if d[d > 0].sum() >= -d[d < 0].sum() else -1.0
+
+
+def lisser(r, pas, largeur_mm=None):
+    largeur_mm = JAUGE_MM if largeur_mm is None else largeur_mm
+    n = max(int(round(largeur_mm / pas)), 1)
+    return np.convolve(r, np.ones(n) / n, mode="same")
+
+
+def fond_initial(x, r, mode=None):
+    """Niveau du « béton sain » (µε) : quart bas des creux du profil lissé (minima espacés de ≥ 10 mm). Constant le long de la fibre
+    (la fibre ne fait que 100 mm, l'échelle de ±2 m d'OBRstudio n'a pas de sens ici). 0 si mode « zero »."""
+    mode = PLANCHER if mode is None else mode
+    if mode == "zero":
+        return 0.0
+    pas = float(np.median(np.diff(x)))
+    rl = lisser(r, pas)
+    mins = argrelmin(rl, order=max(int(round(10.0 / pas)), 1))[0]
+    vm = rl[mins] if len(mins) >= 3 else rl
+    return float(np.quantile(vm, 0.25))
+
+
+def aires(x, r, centres, plancher, portee=None):
+    """Méthode « aires » : ouverture (µm) = aire du profil au-dessus du plancher (constante, µε) sur le territoire de la fissure.
+    Territoire : jusqu'au creux qui sépare du voisin ; aux extrémités, jusqu'au minimum du profil lissé dans la portée."""
+    portee = min(PORTEE_MAX_MM / 2, 50.0) if portee is None else portee
+    pas = float(np.median(np.diff(x)))
+    rl = lisser(r, pas)
+    idx = np.argsort(centres)
+    ic = np.array([int(np.argmin(np.abs(x - centres[i]))) for i in idx])
+    nr = max(int(round(portee / pas)), 2)
+    bornes = []
+    for j, i0 in enumerate(ic):
+        if j == 0:
+            lo_i = max(0, i0 - nr); g = lo_i + int(np.argmin(rl[lo_i:i0 + 1]))
+        else:
+            g = ic[j - 1] + int(np.argmin(rl[ic[j - 1]:i0 + 1]))
+        if j == len(ic) - 1:
+            hi_i = min(len(x) - 1, i0 + nr); d = i0 + int(np.argmin(rl[i0:hi_i + 1]))
+        else:
+            d = i0 + int(np.argmin(rl[i0:ic[j + 1] + 1]))
+        bornes.append((g, d))
+    out = np.zeros(len(centres))
+    for k, i in enumerate(idx):
+        g, d = bornes[k]
+        sl = slice(g, d + 1)
+        out[i] = max(0.0, 1e-3 * _trapz(r[sl] - plancher, x[sl]))
+    return out
+
+
+# ----------------------------------------------------------------------------- ajustement sur une date
+def ajuster_date(x, cible, C, W, L, A, libres, b0=0.0, avec_fond=None):
+    """Moindres carrés (w, λ, a, b pour toutes les fissures ; centres seulement pour les `libres`).
+    Retourne c, w, λ, a, b, SSE (SSE pondéré par W_NEG)."""
+    avec_fond = FOND if avec_fond is None else avec_fond
     n = len(C); C0 = np.asarray(C, float); fi = np.where(libres)[0]
 
     def f(q):
-        c = C0.copy(); c[fi] = q[2 * n:]
-        return modele(x, c, q[:n], q[n:2 * n]) - cible
+        c = C0.copy(); c[fi] = q[3 * n + 1:]
+        return _pond(modele(x, c, q[:n], q[n:2 * n], q[2 * n:3 * n], q[3 * n]) - cible)
 
-    q0 = np.r_[W, L, C0[fi]]
-    lo = np.r_[np.zeros(n), np.full(n, LAM_MIN), np.maximum(C0[fi] - DECALAGE_MAX, x.min())]
-    hi = np.r_[np.full(n, 5e3), np.full(n, LAM_MAX), np.minimum(C0[fi] + DECALAGE_MAX, x.max())]
+    bb = (-FOND_MAX, FOND_MAX) if avec_fond else (-1e-6, 1e-6)
+    q0 = np.r_[W, L, A, b0 if avec_fond else 0.0, C0[fi]]
+    lo = np.r_[np.zeros(n), np.full(n, LAM_MIN), np.zeros(n), bb[0], np.maximum(C0[fi] - DECALAGE_MAX, x.min())]
+    hi = np.r_[np.full(n, PLAFOND_UM), np.full(n, LAM_MAX), np.full(n, max(A_MAX, 1e-6)), bb[1], np.minimum(C0[fi] + DECALAGE_MAX, x.max())]
     q0 = np.clip(q0, lo + 1e-9, hi - 1e-9)
     s = least_squares(f, q0, bounds=(lo, hi), max_nfev=80,
-                      x_scale=np.r_[np.full(n, 20.0), np.full(n, 0.05), np.full(len(fi), 2.0)])
-    c = C0.copy(); c[fi] = s.x[2 * n:]
-    return c, s.x[:n], s.x[n:2 * n], float(np.sum(s.fun ** 2))
+                      x_scale=np.r_[np.full(n, 20.0), np.full(n, 0.05), np.full(n, 2.0), 500.0, np.full(len(fi), 2.0)])
+    c = C0.copy(); c[fi] = s.x[3 * n + 1:]
+    return c, s.x[:n], s.x[n:2 * n], s.x[2 * n:3 * n], float(s.x[3 * n]), float(np.sum(s.fun ** 2))
 
 
-def detecter(x, r, positif=False, verbose=False):
-    """Ajout glouton de fissures sur la dernière échéance (centres libres)."""
-    cible = np.maximum(r, 0) if positif else r
-    C = np.zeros(0); W = np.zeros(0); L = np.zeros(0); sse = float(np.sum(cible ** 2))
+def _retirer(i, *tabs):
+    return tuple(np.delete(t, i) for t in tabs)
+
+
+def detecter(x, r, prom=None, forcees=(), interdites=(), verbose=False):
+    """Détection sur la dernière échéance, à la OBRstudio :
+       1. candidats = pics du résidu lissé de proéminence ≥ prom (auto : PROM_FACTEUR × bruit), sauf positions interdites,
+          plus les positions forcées ;
+       2. ouverture initiale = aire au-dessus du fond ;
+       3. ajustement global (w, λ, a, b, c) ;
+       4. élagage : fusion des centres < DIST_MIN, retrait des fissures d'ouverture < COD_MIN (hors forcées) ;
+       5. complément glouton sur le résidu non expliqué.
+    Retourne C, W, L, A, b."""
+    pas = float(np.median(np.diff(x)))
+    tol = max(1.5 * pas, JAUGE_MM / 4, 3.0)
+    sigma = bruit_mad(r)
+    prom = PROM_FACTEUR * sigma if not prom else prom
+    rl = lisser(r, pas)
+    b0 = fond_initial(x, r)
+    interdit = lambda c: any(abs(c - i) < tol for i in interdites)
+    cand = [c for c in x[find_peaks(rl, prominence=prom)[0]] if not interdit(c)]
+    forcees = [f for f in forcees if f is not None]
+    for f in forcees:
+        if not any(abs(c - f) < tol for c in cand):
+            cand.append(f)
+    cand = sorted(cand)
+    if verbose:
+        print(f"  bruit {sigma:.1f} µε, proéminence {prom:.0f} µε, fond initial {b0:.0f} µε, {len(cand)} candidat(s) (tol. {tol:.1f} mm)")
+    vide = (np.zeros(0),) * 4 + (b0,)
+    if not cand:
+        return vide
+    C = np.array(cand)
+    forc = np.array([any(abs(c - f) < tol for f in forcees) for c in C])
+    W = np.maximum(aires(x, r, C, b0), W_MIN)
+    L = np.full(len(C), np.clip(LAM_INIT, LAM_MIN, LAM_MAX))
+    A = np.full(len(C), min(A_INIT, A_MAX))
+    C, W, L, A, b, sse = ajuster_date(x, r, C, W, L, A, np.ones(len(C), bool), b0)
+    while len(C) > 0:
+        ordre = np.argsort(C); dd = np.diff(C[ordre])
+        i_ret = None
+        if len(C) > 1 and dd.min() < DIST_MIN:
+            j = int(np.argmin(dd)); p, q = ordre[j], ordre[j + 1]
+            i_ret = p if (W[p] < W[q] and not forc[p]) or forc[q] else q
+            if forc[i_ret]:
+                i_ret = None
+        if i_ret is None:
+            faibles = [i for i in range(len(C)) if W[i] < COD_MIN and not forc[i]]
+            if not faibles:
+                break
+            i_ret = min(faibles, key=lambda i: W[i])
+        if verbose:
+            print(f"  − fissure en X={C[i_ret]:.1f} mm élaguée (w={W[i_ret]:.1f} µm)")
+        C, W, L, A, forc = _retirer(i_ret, C, W, L, A, forc)
+        if len(C) == 0:
+            return vide
+        C, W, L, A, b, sse = ajuster_date(x, r, C, W, L, A, np.ones(len(C), bool), b)
+    # complément glouton (résidu non expliqué)
     while len(C) < N_MAX:
-        res = cible - modele(x, C, W, L); i = int(np.argmax(res))
-        if res[i] <= 0:
+        res = r - modele(x, C, W, L, A, b)
+        resl = lisser(res, pas)
+        i = int(np.argmax(resl))
+        if resl[i] <= prom or interdit(x[i]):
             break
         meilleur = None
-        for lam0 in (0.05, 0.15, 0.4):                   # multi-départ : la nouvelle fissure seule, les autres figées
+        for lam0 in (0.05, 0.15, 0.4):
+            lam0 = float(np.clip(lam0, LAM_MIN, LAM_MAX))
             w0 = 2 * res[i] / (500.0 * lam0)
-            cn, wn, ln, _ = ajuster_date(x, res, [x[i]], [w0], [lam0], [True])
-            if meilleur is None or _ < meilleur[3]:
-                meilleur = (cn[0], wn[0], ln[0], _)
-        C2 = np.r_[C, meilleur[0]]; W2 = np.r_[W, meilleur[1]]; L2 = np.r_[L, meilleur[2]]
-        c, w, l, sse2 = ajuster_date(x, cible, C2, W2, L2, np.ones(len(C2), bool))
+            cn, wn, ln, an, _, e = ajuster_date(x, res, [x[i]], [w0], [lam0], [min(A_INIT, A_MAX)], [True], 0.0, False)
+            if meilleur is None or e < meilleur[4]:
+                meilleur = (cn[0], wn[0], ln[0], an[0], e)
+        C2 = np.r_[C, meilleur[0]]; W2 = np.r_[W, meilleur[1]]; L2 = np.r_[L, meilleur[2]]; A2 = np.r_[A, meilleur[3]]
+        c, w, l, a, b2, sse2 = ajuster_date(x, r, C2, W2, L2, A2, np.ones(len(C2), bool), b)
         proche = len(c) > 1 and np.min(np.diff(np.sort(c))) < DIST_MIN
         if verbose:
             print(f"    essai X={x[i]:.0f}: gain {1 - sse2 / sse:.3f}, w_min {w.min():.0f}, proche={proche}")
-        if sse2 > sse * (1 - ADD_GAIN) or w.min() < W_MIN or proche:
+        if sse2 > sse * (1 - ADD_GAIN) or w[-1] < COD_MIN or proche:
             break
-        C, W, L, sse = c, w, l, sse2
+        C, W, L, A, b, sse = c, w, l, a, b2, sse2
+        forc = np.r_[forc, False]
         if verbose:
             print(f"  + fissure en X={x[i]:.1f} mm  (SSE {sse:.3g})")
-    return C, W, L
+    o = np.argsort(C)
+    return C[o], W[o], L[o], A[o], b
 
 
-def global_regularise(xs, rs, C0, W0, L0, lam_lissage=LAMBDA_LISSAGE, positif=False):
-    """Ajustement global : w_i(t) = somme cumulée d'incréments ≥ 0 (non décroissant), λ_i(t) lissé."""
+# ----------------------------------------------------------------------------- ajustement global régularisé
+def global_regularise(xs, rs, C0, W0, L0, A0, B0):
+    """Paramètres : incréments de w ≥ 0 (w_i(t) non décroissant), λ_i constant, incréments de a ≥ 0 (a_i(t) non décroissant),
+    centres c_i communs, fond b(t_k). Pas de pénalité : la régularité vient de la paramétrisation."""
     n, T = W0.shape
+    nT = n * T
     D0 = np.diff(np.c_[np.zeros(n), np.maximum.accumulate(W0, axis=1)], axis=1)
+    DA0 = np.diff(np.c_[np.zeros(n), np.maximum.accumulate(A0, axis=1)], axis=1)
+    L0 = np.median(L0, axis=1)
     nd = [len(x) for x in xs]; off = np.r_[0, np.cumsum(nd)]
-    cibles = [np.maximum(r, 0) if positif else r for r in rs]
-    sq = np.sqrt(lam_lissage)
 
     def depaqueter(q):
-        D = q[:n * T].reshape(n, T); L = q[n * T:2 * n * T].reshape(n, T); C = q[2 * n * T:]
-        return np.cumsum(D, axis=1), L, C
+        D = q[:nT].reshape(n, T); L = q[nT:nT + n]; DA = q[nT + n:2 * nT + n].reshape(n, T)
+        C = q[2 * nT + n:2 * nT + 2 * n]; B = q[2 * nT + 2 * n:]
+        return np.cumsum(D, axis=1), L, np.minimum(np.cumsum(DA, axis=1), A_MAX), C, B
 
     def f(q):
-        W, L, C = depaqueter(q)
-        res = [modele(xs[k], C, W[:, k], L[:, k]) - cibles[k] for k in range(T)]
-        pen = (np.diff(L, axis=1) * sq).ravel()
-        return np.r_[np.concatenate(res), pen]
+        W, L, A, C, B = depaqueter(q)
+        return np.concatenate([_pond(modele(xs[k], C, W[:, k], L, A[:, k], B[k]) - rs[k]) for k in range(T)])
 
-    sp = lil_matrix((off[-1] + n * (T - 1), n * T + n * T + n), dtype=int)
+    sp = lil_matrix((off[-1], 2 * nT + 2 * n + T), dtype=int)
     for k in range(T):
         rows = slice(off[k], off[k + 1])
         for i in range(n):
             sp[rows, i * T:i * T + k + 1] = 1
-            sp[rows, n * T + i * T + k] = 1
-            sp[rows, 2 * n * T + i] = 1
-    r0 = off[-1]
-    for i in range(n):
-        for k in range(1, T):
-            sp[r0 + i * (T - 1) + k - 1, n * T + i * T + k] = 1
-            sp[r0 + i * (T - 1) + k - 1, n * T + i * T + k - 1] = 1
-    q0 = np.r_[D0.ravel(), L0.ravel(), C0]
-    lo = np.r_[np.zeros(n * T), np.full(n * T, LAM_MIN), np.maximum(C0 - DECALAGE_MAX, xs[0].min())]
-    hi = np.r_[np.full(n * T, 5e3), np.full(n * T, LAM_MAX), np.minimum(C0 + DECALAGE_MAX, xs[0].max())]
+            sp[rows, nT + i] = 1
+            sp[rows, nT + n + i * T:nT + n + i * T + k + 1] = 1
+            sp[rows, 2 * nT + n + i] = 1
+        sp[rows, 2 * nT + 2 * n + k] = 1
+    q0 = np.r_[D0.ravel(), L0, DA0.ravel(), C0, B0]
+    bb = FOND_MAX if FOND else 1e-6
+    lo = np.r_[np.zeros(nT), np.full(n, LAM_MIN), np.zeros(nT), np.maximum(C0 - DECALAGE_MAX, xs[0].min()), np.full(T, -bb)]
+    hi = np.r_[np.full(nT, PLAFOND_UM), np.full(n, LAM_MAX), np.full(nT, max(A_MAX, 1e-6)), np.minimum(C0 + DECALAGE_MAX, xs[0].max()), np.full(T, bb)]
     q0 = np.clip(q0, lo + 1e-9, hi - 1e-9)
     s = least_squares(f, q0, bounds=(lo, hi), jac_sparsity=sp, max_nfev=60,
-                      x_scale=np.r_[np.full(n * T, 5.0), np.full(n * T, 0.05), np.full(n, 2.0)])
+                      x_scale=np.r_[np.full(nT, 5.0), np.full(n, 0.05), np.full(nT, 2.0), np.full(n, 2.0), np.full(T, 500.0)])
     return depaqueter(s.x)
 
 
+# ----------------------------------------------------------------------------- réglages globaux
 def fixer_lambda(lam, tolerance=0.0):
-    """λ global (1/mm) : borne tous les λ_i(t) à [λ(1-tol), λ(1+tol)] (tol = 0 : λ imposé)."""
+    """λ global (1/mm) : borne λ à [λ(1-tol), λ(1+tol)] (tol = 0 : λ imposé)."""
     global LAM_MIN, LAM_MAX, LAM_INIT
     LAM_MIN, LAM_MAX, LAM_INIT = lam * (1 - tolerance) - 1e-9, lam * (1 + tolerance) + 1e-9, lam
 
 
-def analyser(h, t0=T0_DEFAUT, positif=False, verbose=True):
+def appliquer_preset(nom, tol_lambda=0.0):
+    """Preset câble/pose : bornes de λ, de a (≤ A_CUBE_MM), du COD ; λ imposé si le preset donne 1/λ."""
+    global LAM_MIN, LAM_MAX, A_MAX, PLAFOND_UM, COD_MIN, PORTEE_MAX_MM
+    p = PRESETS[nom]
+    PORTEE_MAX_MM = p["portee_max_mm"]
+    A_MAX, PLAFOND_UM, COD_MIN = min(p["coeur_max_mm"], A_CUBE_MM), 1000.0 * p["plafond_mm"], p["cod_min_um"]
+    LAM_MIN, LAM_MAX = 3.0 / PORTEE_MAX_MM, 5.0 / JAUGE_MM
+    if p.get("inv_lambda_mm"):
+        fixer_lambda(float(np.clip(1.0 / p["inv_lambda_mm"], LAM_MIN, LAM_MAX)), tol_lambda)
+
+
+# ----------------------------------------------------------------------------- analyse complète
+def analyser(h, t0=T0_DEFAUT, signe="+", prom=None, forcees=(), interdites=(), verbose=True):
     axe = h["axe_mesure"].iloc[0]
     echeances = np.sort(h["temps_ecoule_j"].unique()); echeances = echeances[echeances >= t0]
     xs, rs = [], []
     for t in echeances:
         q = h[h["temps_ecoule_j"] == t].sort_values("xb")
-        xs.append(q[axe].values * 1000); rs.append(q["r"].values)
+        xs.append(q[axe].values * 1000); rs.append(q["r"].values.astype(float))
+    sg = signe_auto(rs[-1]) if signe == "auto" else (1.0 if signe == "+" else -1.0)
+    rs = [sg * r for r in rs]
     if verbose:
-        print(f"Bruit court terme (MAD, dernière échéance) : {bruit_mad(rs[-1]):.0f} µε")
+        print(f"Signe : {'+' if sg > 0 else '−'} ; bruit court terme (MAD, dernière échéance) : {bruit_mad(rs[-1]):.0f} µε")
         print(f"Détection sur {echeances[-1]:.0f} j :")
-    if verbose:
         paires = estimer_beta(xs[-1], rs[-1], verbose=True)
         if paires:
             print(f"  β médian des paires : {1000 * np.median([p[2] for p in paires]):.0f} m⁻¹ ({len(paires)} paire(s))")
-    C, W, L = detecter(xs[-1], rs[-1], positif, verbose)
+    C, W, L, A, b = detecter(xs[-1], rs[-1], prom, forcees, interdites, verbose)
     if len(C) == 0:
         raise SystemExit("aucune fissure détectée")
     n, T = len(C), len(echeances)
-    W0 = np.zeros((n, T)); L0 = np.tile(L[:, None], (1, T)); W0[:, -1] = W
-    for k in range(T - 2, -1, -1):                       # suivi à rebours, centres figés
-        cib = np.maximum(rs[k], 0) if positif else rs[k]
-        c, w, l, _ = ajuster_date(xs[k], cib, C, W0[:, k + 1], L0[:, k + 1], np.zeros(n, bool))
-        W0[:, k] = np.minimum(w, W0[:, k + 1]); L0[:, k] = l
-    Wf, Lf, Cf = global_regularise(xs, rs, C, W0, L0, positif=positif)
-    lignes = []
-    hist = {}
+    W0 = np.zeros((n, T)); L0 = np.tile(L[:, None], (1, T)); A0 = np.tile(A[:, None], (1, T)); W0[:, -1] = W
+    B0 = np.full(T, b)
+    for k in range(T - 2, -1, -1):                         # suivi à rebours, centres figés
+        c, w, l, a, bk, _ = ajuster_date(xs[k], rs[k], C, W0[:, k + 1], L0[:, k + 1], A0[:, k + 1], np.zeros(n, bool), B0[k + 1])
+        W0[:, k] = np.minimum(w, W0[:, k + 1]); L0[:, k] = l; A0[:, k] = np.minimum(a, A0[:, k + 1]); B0[k] = bk
+    Wf, Lf, Af, Cf, Bf = global_regularise(xs, rs, C, W0, L0, A0, B0)
+    lignes, hist = [], {}
     for k, t in enumerate(echeances):
-        fit = modele(xs[k], Cf, Wf[:, k], Lf[:, k])
+        fit = modele(xs[k], Cf, Wf[:, k], Lf, Af[:, k], Bf[k])
         rmse = float(np.sqrt(np.mean((fit - rs[k]) ** 2)))
-        hist[t] = (xs[k], rs[k], fit)
+        w_air = aires(xs[k], rs[k], Cf, fond_initial(xs[k], rs[k]))     # recoupement indépendant
+        hist[t] = (xs[k], sg * rs[k], sg * fit)
         for i in range(n):
-            lignes.append(dict(t_j=t, id=i, pos_mm=Cf[i], w_um=Wf[i, k], lambda_m1=1000 * Lf[i, k],
-                               longueur_transfert_mm=1 / Lf[i, k]))
+            lignes.append(dict(t_j=t, id=i, pos_mm=Cf[i], w_um=Wf[i, k], w_aires_um=w_air[i], lambda_m1=1000 * Lf[i],
+                               longueur_transfert_mm=1 / Lf[i], coeur_a_mm=Af[i, k], fond_ue=Bf[k],
+                               pic_ue=amplitude(Wf[i, k], Af[i, k], Lf[i]), plafond=bool(Wf[i, k] >= 0.99 * PLAFOND_UM)))
         if verbose:
-            print(f"{t:6.1f} j : {n} fissures, RMSE={rmse:4.0f} µε, Σw={Wf[:, k].sum():.0f} µm")
+            print(f"{t:6.1f} j : {n} fissures, RMSE={rmse:4.0f} µε, fond={Bf[k]:5.0f} µε, "
+                  f"Σw={Wf[:, k].sum():.0f} µm (aires : {w_air.sum():.0f} µm)")
     return pd.DataFrame(lignes), hist, Cf
 
 
 def tracer(cube, seg, h, df, hist, chemin):
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    ts = sorted(hist); idx = np.unique(np.linspace(0, len(ts) - 1, 5).astype(int)); sel = [ts[i] for i in idx]
+    ts = sorted(hist); idx = np.unique(np.linspace(0, len(ts) - 1, 4).astype(int)); sel = [ts[i] for i in idx]
     fig, ax = plt.subplots(2, 3, figsize=(18, 9)); ax = ax.ravel()
     for a, t in zip(ax, sel):
         x, r, fit = hist[t]
-        a.plot(x, r, "k", lw=1, label="mesure − retrait"); a.plot(x, fit, "r", label="shear lag")
+        a.plot(x, r, "k", lw=1, label="mesure − retrait"); a.plot(x, fit, "r", label="shear lag (+ fond)")
         a.axhline(0, color="gray", lw=.5); a.set_title(f"{cube} {seg} — {t:.0f} j"); a.set_xlabel("position (mm)"); a.set_ylabel("µε")
     ax[0].legend(fontsize=7)
-    a = ax[5]
+    a = ax[4]
     for i, g in df.groupby("id"):
         a.plot(g["t_j"], g["w_um"], label=f"X={g['pos_mm'].iloc[0]:.0f}")
-    a.plot(df.groupby("t_j")["w_um"].sum(), "k", lw=2, label="Σw")
+    a.plot(df.groupby("t_j")["w_um"].sum(), "k", lw=2, label="Σw modèle")
+    a.plot(df.groupby("t_j")["w_aires_um"].sum(), "k--", lw=1.5, label="Σw aires")
     a.set_xlabel("t (j)"); a.set_ylabel("w (µm)"); a.legend(fontsize=6, ncol=2); a.set_title("ouvertures")
+    a = ax[5]
+    d = df[df["t_j"] == df["t_j"].max()]
+    a.bar(d["pos_mm"], d["coeur_a_mm"], width=2, label="cœur a (mm)")
+    a.plot(d["pos_mm"], d["longueur_transfert_mm"], "ro", label="1/λ (mm)")
+    a.set_xlabel("position (mm)"); a.legend(fontsize=7); a.set_title("forme (dernière échéance)")
     fig.tight_layout(); fig.savefig(chemin, dpi=110); plt.close(fig)
 
 
+def _liste(s):
+    return [float(v) for v in s.replace(";", ",").split(",") if v.strip()] if s else []
+
+
 def main():
+    global JAUGE_MM, PLANCHER, A_MAX, COD_MIN, PLAFOND_UM, FOND, W_NEG, PROM_FACTEUR, LAM_MIN
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12")
     ap.add_argument("--segment", default="s14")
     ap.add_argument("--t0", type=float, default=T0_DEFAUT)
     ap.add_argument("--theta", type=float, nargs=4, metavar=("N", "k", "a", "n"), default=THETA_DEFAUT)
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT)
-    ap.add_argument("--positif", action="store_true", help="n'ajuste que la part du résidu au-dessus du retrait")
-    ap.add_argument("--lambda-global", default=None, metavar="m-1|auto",
-                    help="λ commun à toutes les fissures et dates : valeur en m⁻¹, ou 'auto' (médiane des paires de pics)")
+    ap.add_argument("--jauge", type=float, default=None, help="largeur de jauge OBR en mm (défaut 5)")
+    ap.add_argument("--preset", choices=sorted(PRESETS), help="câble / pose : bornes de λ, a, COD ; λ imposé si 1/λ connu")
+    ap.add_argument("--signe", choices=["auto", "+", "-"], default="+", help="signe des fissures (défaut + : la physique impose des pics positifs)")
+    ap.add_argument("--prom", type=float, default=None, help="proéminence minimale d'un pic en µε (défaut : facteur × bruit)")
+    ap.add_argument("--prom-facteur", type=float, default=None, help=f"facteur de bruit pour la proéminence (défaut {PROM_FACTEUR})")
+    ap.add_argument("--codmin", type=float, default=None, help="ouverture minimale d'une fissure en µm")
+    ap.add_argument("--plafond", type=float, default=None, help="COD maximal en mm")
+    ap.add_argument("--a-max", type=float, default=None, help=f"demi-largeur max du cœur en mm (défaut {A_CUBE_MM}) ; 0 = noyau exponentiel pur")
+    ap.add_argument("--largeur-max", type=float, default=None, metavar="mm", help="longueur de transfert maximale 1/λ (mm)")
+    ap.add_argument("--plancher", choices=["local", "zero"], default=None, help="fond initial / plancher des aires")
+    ap.add_argument("--sans-fond", action="store_true", help="pas de décalage b(t) ajusté")
+    ap.add_argument("--w-neg", type=float, default=None, help=f"poids des points sous le modèle (défaut {W_NEG} ; 1 = symétrique)")
+    ap.add_argument("--forcees", default="", help="positions (mm) de fissures imposées, séparées par des virgules")
+    ap.add_argument("--interdites", default="", help="positions (mm) où aucune fissure n'est admise")
+    ap.add_argument("--lambda-global", default=None, metavar="m-1|auto", help="λ commun imposé : valeur en m⁻¹ ou 'auto' (médiane des paires)")
     ap.add_argument("--tol-lambda", type=float, default=0.0, help="tolérance relative autour du λ global (défaut 0 = imposé)")
-    ap.add_argument("--largeur-max", type=float, default=None, metavar="mm",
-                    help="longueur de transfert maximale 1/λ (mm) : impose λ ≥ 1/largeur (défaut : 100 mm)")
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
     warnings.filterwarnings("ignore")
-    h = donnees_segment(a.cube, a.segment, a.theta, a.de)
+    if a.jauge:
+        JAUGE_MM = a.jauge
+    if a.preset:
+        appliquer_preset(a.preset, a.tol_lambda)
+    if a.codmin is not None:
+        COD_MIN = a.codmin
+    if a.plafond is not None:
+        PLAFOND_UM = 1000 * a.plafond
+    if a.a_max is not None:
+        A_MAX = a.a_max
     if a.largeur_max:
-        global LAM_MIN
-        LAM_MIN = 1.0 / a.largeur_max
+        LAM_MIN = max(LAM_MIN, 1.0 / a.largeur_max)
+    if a.plancher:
+        PLANCHER = a.plancher
+    if a.sans_fond:
+        FOND = False
+    if a.w_neg is not None:
+        W_NEG = a.w_neg
+    if a.prom_facteur is not None:
+        PROM_FACTEUR = a.prom_facteur
+    h = donnees_segment(a.cube, a.segment, a.theta, a.de)
     if a.lambda_global:
         if a.lambda_global == "auto":
             ech = h[h["temps_ecoule_j"] == h["temps_ecoule_j"].max()].sort_values("xb")
-            p = estimer_beta(ech[ech["axe_mesure"].iloc[0]].values * 1000, ech["r"].values)
+            r = ech["r"].values.astype(float)
+            p = estimer_beta(ech[ech["axe_mesure"].iloc[0]].values * 1000, signe_auto(r) * r)
             if not p:
                 raise SystemExit("aucune paire exploitable pour estimer β : donner --lambda-global en m⁻¹")
             lam = float(np.median([q[2] for q in p]))
         else:
             lam = float(a.lambda_global) / 1000
         fixer_lambda(lam, a.tol_lambda); print(f"λ global = {1000 * lam:.0f} m⁻¹ (± {100 * a.tol_lambda:.0f} %)")
-    df, hist, C = analyser(h, a.t0, a.positif)
+    df, hist, C = analyser(h, a.t0, a.signe, a.prom, _liste(a.forcees), _liste(a.interdites))
     if a.csv:
         df.to_csv(a.csv, index=False)
     if a.plot:
