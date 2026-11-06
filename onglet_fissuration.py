@@ -79,6 +79,22 @@ def _theorie_params():
     return g, e
 
 
+@st.cache_resource
+def _memo():
+    return {}
+
+
+def _memoise(f):
+    """Cache des résultats par arguments. Pas st.cache_data : le rappel de progression appelle des éléments
+    Streamlit (barre), que cache_data tenterait de rejouer (CacheReplayClosureError)."""
+    def enveloppe(*args, _progression=None):
+        d = _memo().setdefault(f.__name__, {})
+        if args not in d:
+            d[args] = f(*args, _progression=_progression)
+        return d[args]
+    return enveloppe
+
+
 @st.cache_data(show_spinner="Préparation des données (une seule fois par cube)…")
 def _donnees(cube):
     return F.prepare(cube, bin_mm=1)    # même pas que donnees_segment (CLI)
@@ -89,7 +105,7 @@ def _theta(cube, de, refit, manuel):
     return tuple(F.ajuster(F.prepare(cube), de)) if refit else tuple(manuel)
 
 
-@st.cache_data(show_spinner=False)
+@_memoise
 def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage, _progression=None):
     h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
     with _VERROU:
@@ -105,7 +121,7 @@ def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage,
     return G.groupes(tab, ecart_mm=groupe_mm), hist
 
 
-@st.cache_data(show_spinner=False)
+@_memoise
 def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm, _progression=None):
     """Méthode exponentielle : retourne (tab, hist) ou ('erreur', message)."""
     h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
