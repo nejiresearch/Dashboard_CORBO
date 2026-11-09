@@ -59,9 +59,9 @@ NSTEP = int(TMAX / DT)
 M_DOMMAGE = 2.0      # exposant de sensibilité m du dommage (fixé)
 PARAM_NOMS = ("N", "k", "a", "n", "beta", "alpha_crit")
 # N, k, beta, alpha_crit sont optimisés en espace logarithmique
-BORNES = ([np.log(100), np.log(1e-3), 0.0, 0.3, np.log(1e-3), np.log(0.05)],
-          [np.log(5e5), np.log(5.0), 3e4, 4.0, np.log(1e3), np.log(0.99)])
-DEPARTS = ((5000, 0.05), (20000, 0.2), (2000, 0.02))  # (N0, k0)
+BORNES = ([np.log(5000), np.log(1e-3), 0.0, 0.3, np.log(1e-3), np.log(0.05)],
+          [np.log(25000), np.log(5.0), 3e4, 4.0, np.log(1e3), np.log(0.99)])
+DEPARTS = ((5000, 0.05), (20000, 0.2), (8000, 0.02))  # (N0, k0)
 
 
 def prepare(cube: str, n_dates: int = N_DATES, bin_mm: float = BIN_MM) -> pd.DataFrame:
