@@ -319,9 +319,12 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     exp = job["methode"] == METHODES[1]
 
     theta = _theta(cube, job["de"], job["refit"], job["theta"])
-    st.write(f"Retrait : N={theta[0]:.0f}, k={theta[1]:.4f}, a={theta[2]:.0f}, n={theta[3]:.2f}, "
-             f"β={theta[4]:.3g}, α_crit={theta[5]:.2f}"
-             + ("" if seul else (" · exponentielle (shear lag)" if exp else f" · gaussiennes calées à {job['t_calage']:.1f} j")))
+    st.markdown("**Paramètres du retrait θ** (" + ("ajustés sur ce cube" if job["refit"] else "imposés, non ajustés") + ")"
+                + ("" if seul else (" · exponentielle (shear lag)" if exp else f" · gaussiennes calées à {job['t_calage']:.1f} j")))
+    formats = ("{:.0f}", "{:.4f}", "{:.0f}", "{:.2f}", "{:.3g}", "{:.2f}")
+    unites = ("mol/m³", "1/j", "µε", "", "", "")
+    for col, nom, v, f, u in zip(st.columns(6), F.PARAM_NOMS, theta, formats, unites):
+        col.metric(nom, f.format(v) + (f" {u}" if u else ""))
     _, col_cube, _ = st.columns([1, 1, 1])
     with col_cube:
         st.plotly_chart(make_multi_cube(df_full, tuple(job["segs"]), ()), width="stretch", key="cube_tab11")
