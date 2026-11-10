@@ -43,7 +43,7 @@ from fissuration_gaussiennes import donnees_segment, THETA_DEFAUT, T0_DEFAUT
 from fissuration_gaussiennes import figure_surface as figure_surface_ouvertures
 
 # ----------------------------------------------------------------------------- réglages
-JAUGE_MM = 5.0
+JAUGE_MM = 2.0                   # mm : jauge OBR (recouvrement 50 % → pas de 1 mm)
 PORTEE_MAX_MM = 300.0            # portée max du transfert : λ ≥ 3/portée
 LAM_MIN = 3.0 / PORTEE_MAX_MM    # 1/mm
 LAM_MAX = 5.0 / JAUGE_MM         # 1/mm : λ ≤ 5/jauge

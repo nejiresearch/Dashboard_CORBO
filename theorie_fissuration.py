@@ -3,7 +3,7 @@
 COMMUN = r"""
 ### 0. Hypothèse de départ : décomposition additive
 
-La fibre noyée mesure, à la position $x$ (le long de la fibre) et au temps $t$, une déformation moyennée sur la **jauge OBR de 5 mm** (pas ≈ 1,01 mm) :
+La fibre noyée mesure, à la position $x$ (le long de la fibre) et au temps $t$, une déformation moyennée sur la **jauge OBR de 2 mm** (recouvrement 50 %, pas ≈ 1 mm ; les points voisins partagent la moitié de leur fenêtre, donc leurs bruits sont corrélés) :
 
 $$\varepsilon_{mes}(x,t)=\varepsilon_{retrait}(x,t)+\varepsilon_{fiss}(x,t)+\eta(x,t),\qquad \varepsilon_{fiss}\ge 0$$
 
@@ -58,7 +58,7 @@ GAUSS = r"""
 
 $$w_i(t)=\int \varepsilon_{fiss}\,dx = A_i\,\sigma_i\sqrt{2\pi}\quad(\mu m\text{ si }A\text{ en µε et }\sigma\text{ en mm}\times 10^{-3}),\qquad W(t)=\sum_i w_i(t)$$
 
-**Résolution instrumentale.** Une fissure ponctuelle moyennée sur $L_g=5$ mm donne un pic d'écart-type $\ge L_g/\sqrt{12}\approx1{,}45$ mm : $\sigma_{min}$ = 1,45 mm (évite les pics « de bruit » ultra étroits). La **largeur d'un pic n'est pas une propriété de la fissure** (elle dépend de la jauge et du transfert fibre/matrice). $\sigma_{max}=25$ mm.
+**Résolution instrumentale.** Une fissure ponctuelle moyennée sur $L_g=2$ mm donne un pic d'écart-type $\ge L_g/\sqrt{12}\approx0{,}58$ mm : $\sigma_{min}$ = 0,58 mm (évite les pics « de bruit » ultra étroits). La **largeur d'un pic n'est pas une propriété de la fissure** (elle dépend de la jauge et du transfert fibre/matrice). $\sigma_{max}=25$ mm.
 
 **Algorithme.**
 1. **Calage** à la date $t_{cal}$ (réglable ; par défaut la dernière échéance, la mieux résolue) : ajout **glouton** d'une gaussienne au maximum du résidu non expliqué, tant que le gain relatif de SSE $\ge$ `ADD_GAIN`, que son amplitude $\ge$ `A_MIN`, que le pic dépasse `SEUIL_RMSE`×RMSE courant, que sa distance aux autres centres $\ge$ `DIST_MIN` et que le nombre $\le$ `N_MAX`. Moindres carrés non linéaires à régions de confiance (`least_squares`, méthode TRF, bornes).
@@ -92,7 +92,7 @@ $$w=10^{-3}\!\int\varepsilon\,dx=10^{-3}\,\frac{2P}{\lambda}\,\frac{1+\varsigma+
 
 et le modèle est **paramétré par $w$** (le pic $P$ en est déduit). Comme pour les gaussiennes, $w$ est l'indicateur physique ; $\Sigma w$ est directement comparable.
 
-**Moyenne sur la jauge.** La fibre ne mesure pas $\varepsilon(s)$ mais sa moyenne sur $L_g$ (5 mm) : $\bar\varepsilon(x)=\frac1{L_g}\int_{x-L_g/2}^{x+L_g/2}\varepsilon(s)\,ds$, calculée **analytiquement** (primitive du noyau), sans discrétisation.
+**Moyenne sur la jauge.** La fibre ne mesure pas $\varepsilon(s)$ mais sa moyenne sur $L_g$ (2 mm) : $\bar\varepsilon(x)=\frac1{L_g}\int_{x-L_g/2}^{x+L_g/2}\varepsilon(s)\,ds$, calculée **analytiquement** (primitive du noyau), sans discrétisation.
 
 **Modèle complet à l'échéance $t_k$** :
 
@@ -112,7 +112,7 @@ $$r(x,t_k)\approx b(t_k)+\sum_i \bar\varepsilon\big(x-c_i;\,w_i(t_k),\lambda_i,a
 
 **Indicateurs.** $\Sigma w$ (modèle) et $\Sigma w^{aires}$ ; RMSE ; $1/\lambda_i$ (longueur de transfert), $a_i$ (cœur), pic $P_i$ ; $b(t)$.
 
-**Forces / faiblesses.** + Forme physique (le même noyau pour toutes les fissures), fond figé par défaut (mesure = retrait + fissures), irréversibilité, recoupement par aires. − **$\lambda$ et $a$ sont mal identifiables à jauge 5 mm** (λ colle souvent à sa borne, $\lambda$ et $a$ sont corrélés) ; le noyau reproduit mal les plateaux larges ; RMSE un peu plus élevé que les gaussiennes ; calcul plus long (≈ 1 min par segment) ; sensible au seuil de détection. La **limite de largeur** ($1/\lambda\le$ `LARGEUR_MAX`, 10 mm par défaut en mode multi) évite qu'une fissure « fantôme » très large absorbe la pente du fond (sinon $\Sigma w$ peut doubler).
+**Forces / faiblesses.** + Forme physique (le même noyau pour toutes les fissures), fond figé par défaut (mesure = retrait + fissures), irréversibilité, recoupement par aires. − **$\lambda$ et $a$ sont mal identifiables à jauge 2 mm (à réévaluer : les essais datent d'une jauge supposée de 5 mm)** (λ colle souvent à sa borne, $\lambda$ et $a$ sont corrélés) ; le noyau reproduit mal les plateaux larges ; RMSE un peu plus élevé que les gaussiennes ; calcul plus long (≈ 1 min par segment) ; sensible au seuil de détection. La **limite de largeur** ($1/\lambda\le$ `LARGEUR_MAX`, 10 mm par défaut en mode multi) évite qu'une fissure « fantôme » très large absorbe la pente du fond (sinon $\Sigma w$ peut doubler).
 """
 
 LIMITES = r"""
@@ -131,7 +131,7 @@ LIMITES = r"""
 | Quand l'utiliser | décrire au mieux la forme du résidu | obtenir des paramètres à sens mécanique et un $\Sigma w$ recoupé |
 
 - **Le résidu dépend du retrait** : un écart global du modèle (paramètre $a$ trop faible/fort, segments d'orientation Y plus hauts de ≈ 2000 µε) fausse $\Sigma w$ ; avant ~28 j le retrait est peu fiable.
-- **Largeur ≠ propriété de la fissure** : à jauge de 5 mm, ni $\sigma$ ni $\lambda$ ne sont fiables ; seule l'**aire** $w$ (et $\Sigma w$) l'est. Comparer les deux méthodes sur $\Sigma w$ est le meilleur test de robustesse.
+- **Largeur ≠ propriété de la fissure** : à jauge de 2 mm, ni $\sigma$ ni $\lambda$ ne sont fiables ; seule l'**aire** $w$ (et $\Sigma w$) l'est. Comparer les deux méthodes sur $\Sigma w$ est le meilleur test de robustesse.
 - Gaussiennes : les fissures apparues après $t_{cal}$ ne sont pas détectées. Exponentielle : une fissure qui n'est visible sur aucune date assez longtemps (< `DUREE_MIN`) est rejetée.
 - Pics voisins chevauchants : seule la somme est fiable, pas la répartition entre fissures.
 - Le bruit (MAD de 150 à 750 µε) et la moyenne sur la jauge limitent la détection des petites fissures.

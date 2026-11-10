@@ -22,7 +22,7 @@ import theorie_fissuration as T
 _VERROU = threading.Lock()   # les paramètres de fissuration sont des constantes du module : un calcul à la fois
 # nom, libellé, défaut, min, max, pas, aide
 PARAMS_FISSURATION = [
-    ("S_MIN", "σ min (mm) ≈ jauge/√12", G.S_MIN, 0.5, 5.0, 0.05, "Largeur minimale d'une gaussienne : résolution de la jauge de 5 mm (5/√12 ≈ 1,45). Plus petit : pics de bruit étroits."),
+    ("S_MIN", "σ min (mm) ≈ jauge/√12", G.S_MIN, 0.3, 5.0, 0.05, "Largeur minimale d'une gaussienne : résolution de la jauge de 2 mm (2/√12 ≈ 0,58). Plus petit : pics de bruit étroits."),
     ("S_MAX", "σ max (mm)", G.S_MAX, 5.0, 50.0, 1.0, "Largeur maximale. Plus grand : une gaussienne très large peut absorber un décalage global du retrait."),
     ("ADD_GAIN", "Gain de SSE min pour ajouter une gaussienne", G.ADD_GAIN, 0.005, 0.3, 0.005, "Une gaussienne n'est ajoutée que si elle réduit la somme des carrés d'au moins cette fraction. Plus petit : plus de gaussiennes."),
     ("SEUIL_RMSE", "Pic candidat si > k × RMSE courant (0 = désactivé)", G.SEUIL_RMSE, 0.0, 5.0, 0.1, "Seuil de détection relatif au RMSE courant du résidu. Plus petit : plus de petits pics retenus."),
