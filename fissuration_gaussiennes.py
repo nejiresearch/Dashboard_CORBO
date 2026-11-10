@@ -8,7 +8,7 @@ r(x, t) ≈ Σ_i A_i(t) · exp(−(x − c_i)² / (2 σ_i(t)²))      avec A_i �
 
 Chaque gaussienne est une fissure (ou un amas) ; son ouverture est l'aire du pic :
     w_i = A_i · σ_i · √(2π) · 1e-3     (A en µε, σ en mm, w en µm)
-L'aire ne dépend pas de la jauge de l'instrument (5 mm), contrairement à A et σ.
+L'aire ne dépend pas de la jauge de l'instrument (2 mm), contrairement à A et σ.
 
 Algorithme (défaut : ordre inverse, sans fusion)
   1. Dernière échéance (signal le mieux résolu) : ajout glouton de gaussiennes, centres libres.
@@ -31,7 +31,7 @@ from scipy.optimize import least_squares
 import fit_retrait as F
 
 T0_DEFAUT = 28.0      # jours : avant, le modèle de retrait est jugé peu performant
-S_MIN = 1.45          # mm : écart-type minimal ≈ résolution (jauge 5 mm / √12)
+S_MIN = 0.58          # mm : écart-type minimal ≈ résolution (jauge 2 mm / √12)
 S_MAX = 25.0          # mm
 ADD_GAIN = 0.04       # gain relatif minimal du SSE pour ajouter une gaussienne
 MERGE_TOL = 0.03      # perte relative maximale du SSE pour accepter une fusion

@@ -131,10 +131,13 @@ python fit_retrait.py --plot fit_C12.png
 
 ## Fissuration : démarche envisagée (à reprendre)
 
+> **Jauge OBR : 2 mm, recouvrement 50 % (pas de 1 mm).** Les résultats chiffrés de cette section ont été obtenus avec une jauge supposée de 5 mm (`JAUGE_MM`, `S_MIN`) ; ils sont à réévaluer.
+> Impact mesuré (C12/C34 s14, échéances ≥ 28 j, 1 sur 3) : Σw quasi inchangée (gaussiennes 274 → 270 µm sur C12 s14, 285 → 285 sur C34 s14 ; shear lag 313 → 307 et 336 → 328 µm). RMSE en baisse (gaussiennes C12 s14 900 → 809 µε ; shear lag 1437 → 1142 et 1150 → 1006 µε). Plus de fissures séparées (C12 s14 : gaussiennes 11 → 13, shear lag 7 → 11). λ médian du shear lag 1000 → 2460 m⁻¹ (C12) : il ne colle plus à la borne.
+
 État : réflexion, premier essai exploratoire (niveau 1) puis décomposition en gaussiennes implémentée dans `fissuration_gaussiennes.py` (voir plus bas).
 
 ### Principe
-La fibre mesure la déformation moyenne sur une jauge Lg : matrice (retrait) + ouverture de fissures. Une fissure de largeur w donne ε_fiss ≈ w/Lg (+4000 µε sur 5 mm ≈ 20 µm). Le résidu r = ε_mesuré − ε_matrice(modèle couplé) est donc un indicateur de fissuration.
+La fibre mesure la déformation moyenne sur une jauge Lg : matrice (retrait) + ouverture de fissures. Une fissure de largeur w donne ε_fiss ≈ w/Lg (+4000 µε sur 2 mm ≈ 8 µm). Le résidu r = ε_mesuré − ε_matrice(modèle couplé) est donc un indicateur de fissuration.
 
 ### Trois niveaux
 1. **Indicateur de fissuration** (essai fait) : position des pics, ouverture cumulée Σw = Σ(excès)·Lg, nombre de pics, par segment et par date.
@@ -169,14 +172,14 @@ python fissuration_gaussiennes.py --cube C12 --segment s14 --plot s14.png --csv 
 ```
 Options : `--t0` (première échéance, 28 j par défaut), `--theta N k a n [β α_crit]` et `--de` (retrait), `--refit` (ré-ajuste le retrait sur le cube, ~10 s). Durée : ~10 s par segment.
 
-**Pourquoi des gaussiennes.** La fibre OBR moyenne la déformation sur une jauge de 5 mm : une fissure de largeur w apparaît comme un pic étalé, pas comme un point. L'**aire** du pic reste égale à l'ouverture, w = ∫ε dx, indépendamment de la jauge. On modélise donc le résidu r(x,t) = ε_mesuré − ε_retrait par
+**Pourquoi des gaussiennes.** La fibre OBR moyenne la déformation sur une jauge de 2 mm (recouvrement 50 %, pas de 1 mm ; bruit corrélé entre points voisins) : une fissure de largeur w apparaît comme un pic étalé, pas comme un point. L'**aire** du pic reste égale à l'ouverture, w = ∫ε dx, indépendamment de la jauge. On modélise donc le résidu r(x,t) = ε_mesuré − ε_retrait par
 
 r(x,t) ≈ Σᵢ Aᵢ(t) · exp(−(x − cᵢ)² / 2σᵢ(t)²),  Aᵢ ≥ 0,  wᵢ = Aᵢ·σᵢ·√(2π)  (w en µm si A en µε et σ en mm : facteur 10⁻³).
 
 Chaque gaussienne a un **centre cᵢ constant** dans le temps (une fissure ne se déplace pas) ; seuls Aᵢ et σᵢ évoluent. Une gaussienne n'est **jamais supprimée** une fois créée.
 
 **Algorithme** (défaut : ordre **inverse**, sans fusion)
-1. *Dernière échéance (113 j)* : le signal est le mieux résolu. Ajout glouton de gaussiennes (σ de 1,45 à 25 mm, jauge/√12 minimum), centres libres ; on ajoute une gaussienne si elle réduit le SSE d'au moins 4 % (amplitude ≥ 500 µε, distance ≥ 2 mm aux autres).
+1. *Dernière échéance (113 j)* : le signal est le mieux résolu. Ajout glouton de gaussiennes (σ de 0,58 à 25 mm, jauge/√12 minimum), centres libres ; on ajoute une gaussienne si elle réduit le SSE d'au moins 4 % (amplitude ≥ 500 µε, distance ≥ 2 mm aux autres).
 2. *Échéances précédentes (à rebours)* : centres figés, Aᵢ ≥ 0 et σᵢ réajustés. Une gaussienne non encore apparue a Aᵢ ≈ 0 : sa date d'apparition se lit sur wᵢ(t). Aucune gaussienne n'est supprimée ni fusionnée.
 3. *Fissuration diffuse a posteriori* : `groupes()` regroupe les gaussiennes dont les centres sont distants de ≤ 8 mm (`GROUPE_MM`) et donne Σw par groupe. Le « diffus » est une propriété calculée après coup, pas un résultat de l'ajustement.
 
@@ -219,7 +222,7 @@ L'onglet 11 propose un choix **Gaussiennes** (`fissuration_gaussiennes.py`) ou *
 
 ### Fissuration par shear lag (`fissuration_cisaillement.py`)
 
-Variante du script gaussiennes avec le noyau physique d'une fissure, ε(x) = (w·λ/2)·exp(−λ|x−c|) (aire = w), moyenné analytiquement sur la jauge de 5 mm. Même résidu (mesure − retrait), mêmes étapes (centres issus de la dernière échéance, suivi à rebours), puis ajustement global avec wᵢ(t) non décroissant (somme cumulée d'incréments ≥ 0), λᵢ(t) lissé et centres communs. Option `--positif` : n'ajuste que la part du résidu au-dessus du retrait.
+Variante du script gaussiennes avec le noyau physique d'une fissure, ε(x) = (w·λ/2)·exp(−λ|x−c|) (aire = w), moyenné analytiquement sur la jauge de 2 mm. Même résidu (mesure − retrait), mêmes étapes (centres issus de la dernière échéance, suivi à rebours), puis ajustement global avec wᵢ(t) non décroissant (somme cumulée d'incréments ≥ 0), λᵢ(t) lissé et centres communs. Option `--positif` : n'ajuste que la part du résidu au-dessus du retrait.
 
 ```bash
 python fissuration_cisaillement.py --cube C12 --segment s14 --plot s14_sl.png --csv s14_sl.csv
