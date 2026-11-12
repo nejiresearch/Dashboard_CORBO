@@ -16,6 +16,7 @@ import streamlit as st
 import fit_retrait as F
 import fissuration_cisaillement as E
 import fissuration_gaussiennes as G
+import retrait_3d as R3
 import script_generator as sg
 import theorie_fissuration as T
 
@@ -156,6 +157,11 @@ def _picker(seg_info, disponibles, comp_label, cube):
                     if st.checkbox(s, value=(s == "s14"), key=f"fiss_{cube}_{s}") or tous:
                         selected.append(s)
     return list(dict.fromkeys(selected))
+
+
+@st.cache_data(show_spinner="Calcul du champ 3D du retrait…")
+def _fig_3d(cube, theta, de, dates, segs):
+    return R3.figure_retrait_3d(theta, de, dates, cube, _donnees(cube), segs)
 
 
 def _retrait_seul(cube, job, theta):
@@ -332,6 +338,13 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
 
     if seul:
         _retrait_seul(cube, job, theta)
+    if st.checkbox("Afficher le retrait modélisé en 3D (isosurfaces animées)", key="fiss_retrait3d",
+                   help="Champ ε = −a·α₃D^n sur une grille 24³ du cube, curseur de temps ; les fibres choisies sont "
+                        "superposées (points colorés par la mesure, même échelle). C'est le retrait de la matrice modélisé."):
+        t3d = tuple(float(t) for t in np.sort(_donnees(cube)["temps_ecoule_j"].unique()))
+        st.plotly_chart(_fig_3d(cube, tuple(float(v) for v in theta), float(job["de"]), t3d, tuple(job["segs"])),
+                        width="stretch", key="retrait3d_fig")
+    if seul:
         return
 
     barre = st.progress(0.0)
