@@ -10,6 +10,7 @@ import pandas as pd
 import inspect
 import fiber_ops
 import fit_retrait
+import retrait_3d
 import fissuration_cisaillement
 import fissuration_gaussiennes
 
@@ -624,11 +625,12 @@ def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_m
     lignes_params = "\n".join(f"G.{k} = {v!r}" for k, v in params)
     src_fit = inspect.getsource(fit_retrait)
     src_gauss = inspect.getsource(fissuration_gaussiennes)
-    for src in (src_fit, src_gauss):
+    src_3d = inspect.getsource(retrait_3d)
+    for src in (src_fit, src_gauss, src_3d):
         assert "'''" not in src, "le source contient ''' : impossible à embarquer"
     corps = f"""
-# ===================== Moteur de calcul (copie de fit_retrait.py et fissuration_gaussiennes.py) =====================
-# Les deux modules sont embarqués ci-dessous pour que ce script soit autonome ; on peut aussi les remplacer par
+# ===================== Moteur de calcul (copie de fit_retrait.py, fissuration_gaussiennes.py et retrait_3d.py) =====================
+# Les trois modules sont embarqués ci-dessous pour que ce script soit autonome ; on peut aussi les remplacer par
 # `import fit_retrait as F` / `import fissuration_gaussiennes as G` si les fichiers du dépôt sont disponibles.
 import sys, types
 import warnings
@@ -643,10 +645,14 @@ _SRC_FIT = r'''{src_fit}'''
 
 _SRC_GAUSS = r'''{src_gauss}'''
 
+_SRC_3D = r'''{src_3d}'''
+
 F = types.ModuleType("fit_retrait"); sys.modules["fit_retrait"] = F
 exec(_SRC_FIT, F.__dict__)
 G = types.ModuleType("fissuration_gaussiennes"); sys.modules["fissuration_gaussiennes"] = G
 exec(_SRC_GAUSS, G.__dict__)
+R3 = types.ModuleType("retrait_3d"); sys.modules["retrait_3d"] = R3
+exec(_SRC_3D, R3.__dict__)
 
 # ===================== Paramètres (modifiables) =====================
 CUBE = {cube!r}
@@ -687,24 +693,27 @@ for seg, (tab, hist) in resultats.items():
                             ylabel="Ouverture w (µm)", title=f"{{CUBE}} {{seg}} — ouvertures").show()
     apply_publication_style(G.figure_suivi(tab, CUBE, seg), xlabel="Position (mm)", ylabel="Temps écoulé (j)",
                             title=f"{{CUBE}} {{seg}} — suivi des gaussiennes").show()
-    G.figure_surface(tab, CUBE, seg).show()           # surface 3D : temps x position x ouverture linéique
+    G.figure_surface(tab, CUBE, seg).show()           # figure 3D : temps x position x ouverture w (µm) de chaque fissure
+
+# Retrait modélisé en 3D (isosurfaces, curseur de temps) avec les fibres choisies superposées
+R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS).show()
 """
     return _build(titre, corps)
 
 
 def gen_fissuration_exp(cube, segs, dates, theta, de, refit, params) -> str:
     """Script autonome : retrait + décomposition exponentielle (shear lag). Embarque fit_retrait.py,
-    fissuration_gaussiennes.py (lecture des données) et fissuration_cisaillement.py ; `params` = réglages de l'onglet."""
+    fissuration_gaussiennes.py (lecture des données), fissuration_cisaillement.py et retrait_3d.py ; `params` = réglages de l'onglet."""
     titre = "Fissuration : retrait + décomposition exponentielle (shear lag)"
     reglages = {k: v for k, v in params.items() if k != "groupe"}
     lignes = "\n".join(f"    {k}={v!r}," for k, v in reglages.items())
-    sources = [inspect.getsource(m) for m in (fit_retrait, fissuration_gaussiennes, fissuration_cisaillement)]
+    sources = [inspect.getsource(m) for m in (fit_retrait, fissuration_gaussiennes, fissuration_cisaillement, retrait_3d)]
     for src in sources:
         assert "'''" not in src, "le source contient ''' : impossible à embarquer"
-    src_fit, src_gauss, src_exp = sources
+    src_fit, src_gauss, src_exp, src_3d = sources
     corps = f"""
-# ===================== Moteur de calcul (copie de fit_retrait.py, fissuration_gaussiennes.py, fissuration_cisaillement.py) =====================
-# Les trois modules sont embarqués pour que ce script soit autonome ; on peut aussi les remplacer par
+# ===================== Moteur de calcul (copie de fit_retrait.py, fissuration_gaussiennes.py, fissuration_cisaillement.py, retrait_3d.py) =====================
+# Les quatre modules sont embarqués pour que ce script soit autonome ; on peut aussi les remplacer par
 # `import fit_retrait as F` / `import fissuration_cisaillement as S` si les fichiers du dépôt sont disponibles.
 import sys, types
 import warnings
@@ -721,12 +730,16 @@ _SRC_GAUSS = r'''{src_gauss}'''
 
 _SRC_EXP = r'''{src_exp}'''
 
+_SRC_3D = r'''{src_3d}'''
+
 F = types.ModuleType("fit_retrait"); sys.modules["fit_retrait"] = F
 exec(_SRC_FIT, F.__dict__)
 G = types.ModuleType("fissuration_gaussiennes"); sys.modules["fissuration_gaussiennes"] = G
 exec(_SRC_GAUSS, G.__dict__)
 S = types.ModuleType("fissuration_cisaillement"); sys.modules["fissuration_cisaillement"] = S
 exec(_SRC_EXP, S.__dict__)
+R3 = types.ModuleType("retrait_3d"); sys.modules["retrait_3d"] = R3
+exec(_SRC_3D, R3.__dict__)
 
 # ===================== Paramètres (modifiables) =====================
 CUBE = {cube!r}
@@ -775,7 +788,10 @@ for seg, (tab, hist) in resultats.items():
     S.figure_forme(tab, CUBE, seg).show()             # longueur de transfert 1/lambda et cœur a
     apply_publication_style(S.figure_suivi(tab, CUBE, seg), xlabel="Position (mm)", ylabel="Temps écoulé (j)",
                             title=f"{{CUBE}} {{seg}} — suivi des fissures").show()
-    S.figure_surface(tab, CUBE, seg).show()           # surface 3D : temps x position x ouverture linéique
+    S.figure_surface(tab, CUBE, seg).show()           # figure 3D : temps x position x ouverture w (µm) de chaque fissure
+
+# Retrait modélisé en 3D (isosurfaces, curseur de temps) avec les fibres choisies superposées
+R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS).show()
 """
     return _build(titre, corps)
 
