@@ -56,6 +56,7 @@ PARAMS_EXP = [
     ("tol_lambda", "Tolérance relative sur λ imposé (±)", 0.0, 0.0, 1.0, 0.05, "Avec un λ imposé ou un preset : λ varie dans [λ(1−tol), λ(1+tol)]. 0 : λ exactement imposé."),
 ]
 PRESETS_EXP = ["aucun"] + sorted(E.PRESETS)
+DIFFUSIONS = ["Dommage en α (β, α_crit)", "Couplage F(w) piloté par les données"]
 METHODES = ["Gaussiennes", "Exponentielle (shear lag)"]
 SEC_PAR_ECHEANCE = 1.0   # estimation grossière du temps de calcul (régularisation globale comprise)
 SEC_PAR_ECHEANCE_EXP = 2.5
@@ -106,9 +107,16 @@ def _theta(cube, de, refit, manuel):
     return tuple(F.ajuster(F.prepare(cube), de)) if refit else tuple(manuel)
 
 
+@st.cache_data(show_spinner="Couplage F(w) : estimation de w(t) et ajustement du retrait (~30 s)…")
+def _theta_fw(cube, de, refit, manuel):
+    """Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w)) en tuples (hachables pour les caches)."""
+    th, (ts, w) = F.ajuster_couplage(F.prepare(cube), de, None if refit else np.array(manuel))
+    return tuple(float(v) for v in th), (tuple(float(t) for t in ts), tuple(float(v) for v in w))
+
+
 @_memoise
-def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage, _progression=None):
-    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
+def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage, couplage=None, _progression=None):
+    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube), couplage=couplage)
     with _VERROU:
         avant = {k: getattr(G, k) for k, _ in params}
         try:
@@ -123,9 +131,9 @@ def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage,
 
 
 @_memoise
-def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm, _progression=None):
+def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm, couplage=None, _progression=None):
     """Méthode exponentielle : retourne (tab, hist) ou ('erreur', message)."""
-    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube))
+    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube), couplage=couplage)
     p = dict(params)
     for k in ("forcees", "interdites"):
         p[k] = E._liste(p.get(k, ""))
@@ -160,15 +168,32 @@ def _picker(seg_info, disponibles, comp_label, cube):
 
 
 @st.cache_data(show_spinner="Calcul du champ 3D du retrait…")
-def _fig_3d(cube, theta, de, dates, segs):
-    return R3.figure_retrait_3d(theta, de, dates, cube, _donnees(cube), segs)
+def _fig_3d(cube, theta, de, dates, segs, couplage=None):
+    return R3.figure_retrait_3d(theta, de, dates, cube, _donnees(cube), segs, couplage=couplage)
 
 
-def _retrait_seul(cube, job, theta):
+def _courbe_w(couplage, theta):
+    """w(t) estimé sur les mesures et facteur de diffusion 1 + F(w(t)) qui en résulte."""
+    ts, w = couplage
+    mult = F.facteur_fw(couplage, theta[4], theta[5])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=ts, y=w, mode="lines+markers", name="w(t) (µm)"))
+    fig.add_trace(go.Scatter(x=np.arange(len(mult)) * F.DT, y=mult, mode="lines", name="1 + F(w) = D_eff / D_e", yaxis="y2"))
+    fig.update_layout(height=300, margin=dict(l=0, r=0, t=30, b=0), xaxis_title="Temps écoulé (j)",
+                      yaxis=dict(title="w : ouverture cumulée (µm)"),
+                      yaxis2=dict(title="D_eff / D_e", overlaying="y", side="right"),
+                      title="Couplage F(w) : ouverture cumulée estimée sur les mesures et facteur de diffusion",
+                      legend=dict(orientation="h"))
+    st.plotly_chart(fig, width="stretch", key="courbe_w_fw")
+    st.caption(f"Facteur final D_eff/D_e = {mult[-1]:.2f}. Si c ≈ 0, les données n'indiquent pas d'accélération "
+               "de la diffusion par la fissuration (le facteur reste ≈ 1).")
+
+
+def _retrait_seul(cube, job, theta, couplage=None):
     ts = list(job["dates"]); pal = px.colors.sequential.Viridis
     lignes = []
     for s in job["segs"]:
-        h = G.donnees_segment(cube, s, np.array(theta), job["de"], g=_donnees(cube))
+        h = G.donnees_segment(cube, s, np.array(theta), job["de"], g=_donnees(cube), couplage=couplage)
         axe = h["axe_mesure"].iloc[0]
         fig = go.Figure()
         for i, t in enumerate(ts):
@@ -248,6 +273,11 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     mode = st.radio("Calcul", ["Retrait seul (rapide)", "Retrait + fissuration"], horizontal=True,
                     help="Le retrait seul permet de vérifier le modèle avant de lancer l'analyse de fissuration.")
     seul = mode.startswith("Retrait seul")
+    diffusion = st.radio("Diffusion du CO₂ (endommagement)", DIFFUSIONS, horizontal=True,
+                         help="Dommage en α : D_eff = D_e(1 + β·max(0, α − α_crit)²), β et α_crit ajustés. "
+                              "Couplage F(w) : D_eff = D_e(1 + c·(w/100 µm)^p), w(t) étant l'ouverture cumulée des fissures "
+                              "estimée sur les mesures ; c et p ajustés. Voir « Théorie ».")
+    fw = diffusion == DIFFUSIONS[1]
     methode = METHODES[0]
     if not seul:
         methode = st.radio("Méthode de décomposition du résidu", METHODES, horizontal=True,
@@ -303,7 +333,7 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
                     value=float(GROUPE_DEFAUT), step=1.0, help=GROUPE_AIDE)
         n_ech = len(t_sel)
         if seul:
-            st.caption("Retrait seul : quelques secondes (+ ~10 s si ré-ajustement).")
+            st.caption("Retrait seul : quelques secondes (+ ~10 s si ré-ajustement, ~30 s en mode couplage F(w)).")
         else:
             st.caption(f"Estimation : ≈ {int(len(segs) * max(n_ech, 1) * (SEC_PAR_ECHEANCE_EXP if exp else SEC_PAR_ECHEANCE))} s "
                        f"({len(segs)} segment(s) × {n_ech} échéance(s)) ; les résultats déjà calculés sont réutilisés.")
@@ -316,33 +346,41 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
             t_cal = min(t_sel, key=lambda t: abs(t - t_cal_sel))
             st.session_state["fissuration_jobs"] = dict(
                 t_calage=float(t_cal), cube=cube, segs=segs, dates=tuple(sorted(t_sel)), regul=regul, refit=refit, de=de, seul=seul,
-                methode=methode, exp_params=vexp, theta=tuple(th),
+                methode=methode, exp_params=vexp, theta=tuple(th), fw=fw,
                 groupe=vexp.get("groupe", vals.get("GROUPE_MM", GROUPE_DEFAUT)),
                 params=tuple((k, vals[k]) for k, *_ in PARAMS_FISSURATION if k in vals))
     job = st.session_state.get("fissuration_jobs")
-    if not job or job["cube"] != cube or job["seul"] != seul or (not seul and job["methode"] != methode):
+    if (not job or job["cube"] != cube or job["seul"] != seul or job.get("fw", False) != fw
+            or (not seul and job["methode"] != methode)):
         return
     exp = job["methode"] == METHODES[1]
 
-    theta = _theta(cube, job["de"], job["refit"], job["theta"])
-    st.markdown("**Paramètres du retrait θ** (" + ("ajustés sur ce cube" if job["refit"] else "imposés, non ajustés") + ")"
+    couplage = None
+    if fw:
+        theta, couplage = _theta_fw(cube, job["de"], job["refit"], job["theta"])
+    else:
+        theta = _theta(cube, job["de"], job["refit"], job["theta"])
+    st.markdown("**Paramètres du retrait θ** ("
+                + ("couplage F(w) : ajustés sur ce cube" if fw else "ajustés sur ce cube" if job["refit"] else "imposés, non ajustés") + ")"
                 + ("" if seul else (" · exponentielle (shear lag)" if exp else f" · gaussiennes calées à {job['t_calage']:.1f} j")))
     formats = ("{:.0f}", "{:.4f}", "{:.0f}", "{:.2f}", "{:.3g}", "{:.2f}")
     unites = ("mol/m³", "1/j", "µε", "", "", "")
-    for col, nom, v, f, u in zip(st.columns(6), F.PARAM_NOMS, theta, formats, unites):
+    for col, nom, v, f, u in zip(st.columns(6), F.PARAM_NOMS_FW if fw else F.PARAM_NOMS, theta, formats, unites):
         col.metric(nom, f.format(v) + (f" {u}" if u else ""))
+    if fw:
+        _courbe_w(couplage, theta)
     _, col_cube, _ = st.columns([1, 1, 1])
     with col_cube:
         st.plotly_chart(make_multi_cube(df_full, tuple(job["segs"]), ()), width="stretch", key="cube_tab11")
         st.caption("🔴 segments analysés")
 
     if seul:
-        _retrait_seul(cube, job, theta)
+        _retrait_seul(cube, job, theta, couplage)
     if st.checkbox("Afficher le retrait modélisé en 3D (isosurfaces animées)", key="fiss_retrait3d",
                    help="Champ ε = −a·α₃D^n sur une grille 24³ du cube, curseur de temps ; les fibres choisies sont "
                         "superposées (points colorés par la mesure, même échelle). C'est le retrait de la matrice modélisé."):
         t3d = tuple(float(t) for t in np.sort(_donnees(cube)["temps_ecoule_j"].unique()))
-        st.plotly_chart(_fig_3d(cube, tuple(float(v) for v in theta), float(job["de"]), t3d, tuple(job["segs"])),
+        st.plotly_chart(_fig_3d(cube, tuple(float(v) for v in theta), float(job["de"]), t3d, tuple(job["segs"]), couplage),
                         width="stretch", key="retrait3d_fig")
     if seul:
         return
@@ -364,10 +402,10 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
         barre.progress(k / nseg, text=f"Segment {s} ({k + 1}/{nseg})…")
         if exp:
             p = {k2: (tuple(v) if isinstance(v, list) else v) for k2, v in job["exp_params"].items() if k2 != "groupe"}
-            r = _calcul_exp(cube, s, job["dates"], theta, job["de"], tuple(sorted(p.items(), key=lambda kv: kv[0])), job["groupe"],
+            r = _calcul_exp(cube, s, job["dates"], theta, job["de"], tuple(sorted(p.items(), key=lambda kv: kv[0])), job["groupe"], couplage,
                            _progression=suivi(k, s))
         else:
-            r = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"], job["t_calage"],
+            r = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"], job["t_calage"], couplage,
                         _progression=suivi(k, s))
         if isinstance(r[0], str):
             st.warning(f"Segment {s} : {r[1]}")
@@ -423,7 +461,7 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
 
     with st.expander("📜 Script Python reproductible (notebook)"):
         if exp:
-            st.code(sg.gen_fissuration_exp(cube, job["segs"], job["dates"], theta, job["de"], False, job["exp_params"]), language="python")
+            st.code(sg.gen_fissuration_exp(cube, job["segs"], job["dates"], theta, job["de"], False, job["exp_params"], couplage), language="python")
         else:
             st.code(sg.gen_fissuration(cube, job["segs"], job["dates"], theta, job["de"], False, job["regul"],
-                                       job["params"], job["groupe"], job["t_calage"]), language="python")
+                                       job["params"], job["groupe"], job["t_calage"], couplage), language="python")

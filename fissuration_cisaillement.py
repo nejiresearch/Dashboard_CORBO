@@ -718,6 +718,7 @@ def main():
     ap.add_argument("--theta", type=float, nargs="+", metavar="V", default=THETA_DEFAUT,
                     help="retrait N k a n [beta alpha_crit]")
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT)
+    ap.add_argument("--couplage", action="store_true", help="retrait ajusté avec le couplage F(w) piloté par les données (≈ 30 s)")
     ap.add_argument("--jauge", type=float, default=None, help="largeur de jauge OBR en mm (défaut 5)")
     ap.add_argument("--preset", choices=sorted(PRESETS), help="câble / pose : bornes de λ, a, COD ; λ imposé si 1/λ connu")
     ap.add_argument("--signe", choices=["auto", "+", "-"], default="+", help="signe des fissures (défaut + : la physique impose des pics positifs)")
@@ -746,7 +747,10 @@ def main():
                jauge=a.jauge, prom_facteur=a.prom_facteur, prom_multi=a.prom_multi, glouton=a.glouton or None,
                marge_bord=a.marge_bord, a_max=a.a_max, codmin=a.codmin, w_neg=a.w_neg, plancher=a.plancher,
                fond=True if a.avec_fond else None)
-    h = donnees_segment(a.cube, a.segment, a.theta, a.de)
+    theta, couplage = a.theta, None
+    if a.couplage:
+        theta, couplage = F.ajuster_couplage(F.prepare(a.cube), a.de, theta)
+    h = donnees_segment(a.cube, a.segment, theta, a.de, couplage=couplage)
     if a.lambda_global:
         try:
             lam = lambda_global(h, a.lambda_global, a.tol_lambda, a.signe)

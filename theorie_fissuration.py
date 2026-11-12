@@ -26,6 +26,12 @@ $$D_{eff}(x,t)=D_e\,\big[1+\beta\,\max(0,\alpha-\alpha_{crit})^{m}\big]$$
 
 où $\beta$ est l'intensité du dommage, $\alpha_{crit}$ le seuil au-delà duquel les fissures apparaissent et $m$ (fixé à 2) l'exposant de sensibilité ; $D_e$ est remplacé par $D_{eff}$ dans le terme de réaction/diffusion $\lambda=N k(1-\alpha)/(D_{eff}c_0)$. $\beta=0$ : diffusion constante. Les valeurs par défaut des scripts sont $\beta=0$ (le dommage n'améliore pas l'ajustement actuel).
 
+**Couplage $F(w)$ piloté par les données (alternative, choix « Diffusion du CO₂ » de l'onglet).** Au lieu de déduire l'endommagement de $\alpha$, la diffusion dépend de l'ouverture cumulée des fissures $w(t)$ **estimée sur les mesures** :
+
+$$D_{eff}(t)=D_e\,\big[1+F(w(t))\big],\qquad F(w)=c\,\Big(\frac{w}{100\,\mu m}\Big)^{p}$$
+
+$w(t)$ est la somme des ouvertures par fibre, c'est-à-dire l'intégrale de l'écart (mesure − retrait) le long de la fibre ($\mu\varepsilon\times$ mm $\to\mu m$) ; on prend la moyenne des fibres du cube, puis on la rend croissante (les fissures ne se referment pas). Le facteur est uniforme dans l'épaisseur (les fissures traversent la peau carbonatée et amènent le CO₂ en profondeur) et appliqué à chaque pas de temps avant la résolution du système (`solve_banded`). Le dommage en $\alpha$ est alors désactivé et $\theta=(N,k,a,n,c,p)$, avec $N,k,c$ en espace logarithmique et $p\in[0{,}3;4]$. Comme $w$ dépend du retrait ajusté, on itère (point fixe) : retrait → $w(t)$ → ajustement de $\theta$ → $w(t)$ recalculé. Ce couplage est *piloté par les données* : aucun calcul mécanique de fissuration n'est fait ; il suppose que l'écart mesure − retrait est de la fissuration. Sur C12 l'ajustement ne demande pas d'accélération notable de la diffusion ($c\approx0{,}009$, $p$ à la borne, facteur final $\approx1{,}07$ ; RMSE inchangé).
+
 **Cinétique de carbonatation** (1er ordre, consommation du réactif) :
 
 $$\frac{\partial \alpha}{\partial t}=k\,u\,(1-\alpha)\;\Rightarrow\;\alpha^{t+\Delta t}=1-(1-\alpha^t)\,e^{-k\,u\,\Delta t}$$
