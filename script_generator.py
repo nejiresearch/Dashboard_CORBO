@@ -616,7 +616,14 @@ fig = fig  # pour l'export ci-dessous
 
 # ------------------------------------------------------------------ onglet 11
 
-def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_mm, t_calage=None) -> str:
+def _txt_couplage(couplage) -> str:
+    """Littéral Python du couplage (dates, w) pour le script exporté."""
+    if couplage is None:
+        return "None"
+    return repr(([round(float(t), 3) for t in couplage[0]], [round(float(w), 3) for w in couplage[1]]))
+
+
+def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_mm, t_calage=None, couplage=None) -> str:
     """Script autonome : retrait + décomposition en gaussiennes (mêmes modules que le dashboard).
 
     Le code de fit_retrait.py et de fissuration_gaussiennes.py est embarqué tel quel (chaînes brutes)
@@ -659,7 +666,9 @@ CUBE = {cube!r}
 SEGMENTS = {list(segs)!r}
 DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; le retrait est peu fiable avant ~28 j
 DE = {float(de)!r}                                    # D_e (m2/s)
-THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, beta, alpha_crit (fit C12)
+THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, beta, alpha_crit (fit C12) ; en mode couplage : N, k, a, n, c, p
+COUPLAGE_FW = {couplage is not None!r}                # True : D_eff = D_e (1 + c (w/100 µm)^p) piloté par les données, au lieu du dommage en alpha
+COUPLAGE = {_txt_couplage(couplage)}   # (dates, w en µm) de w(t) estimé sur les mesures ; None : recalculé
 REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n, beta, alpha_crit) sur le cube (~10 s)
 T_CALAGE = {None if t_calage is None else round(float(t_calage), 3)!r}   # échéance où les gaussiennes sont calées (None = dernière)
 REGULARISATION = {bool(regul)!r}                      # ajustement global : w_i(t) croissant, sigma_i(t) lisse
@@ -669,13 +678,18 @@ GROUPE_MM = {float(groupe_mm)!r}                      # regroupement a posterior
 # ===================== Calcul =====================
 F.CSV = {{CUBE: CSV_PATH}}
 g_prep = F.prepare(CUBE, bin_mm=1)                    # données allégées (même pas que l'analyse de fissuration)
-if REAJUSTER_RETRAIT:
+if COUPLAGE_FW and (REAJUSTER_RETRAIT or COUPLAGE is None):
+    THETA, COUPLAGE = F.ajuster_couplage(F.prepare(CUBE), DE, THETA)
+    THETA = list(THETA)
+elif REAJUSTER_RETRAIT:
     THETA = list(F.ajuster(F.prepare(CUBE), DE))
-print("retrait : " + " ".join(f"{{nm}}={{v:.3g}}" for nm, v in zip(F.PARAM_NOMS, THETA)))
+if not COUPLAGE_FW:
+    COUPLAGE = None
+print("retrait : " + " ".join(f"{{nm}}={{v:.3g}}" for nm, v in zip(F.PARAM_NOMS_FW if COUPLAGE_FW else F.PARAM_NOMS, THETA)))
 
 resultats = {{}}
 for seg in SEGMENTS:
-    h = G.donnees_segment(CUBE, seg, np.array(THETA), DE, g=g_prep)
+    h = G.donnees_segment(CUBE, seg, np.array(THETA), DE, g=g_prep, couplage=COUPLAGE)
     tab, hist = G.analyser(h, t0=0.0, dates=np.array(DATES), verbose=False, regul=REGULARISATION, t_calage=T_CALAGE)
     resultats[seg] = (G.groupes(tab, ecart_mm=GROUPE_MM), hist)
     fin = tab[tab.t_j == tab.t_j.max()]
@@ -696,12 +710,12 @@ for seg, (tab, hist) in resultats.items():
     G.figure_surface(tab, CUBE, seg).show()           # figure 3D : temps x position x ouverture w (µm) de chaque fissure
 
 # Retrait modélisé en 3D (isosurfaces, curseur de temps) avec les fibres choisies superposées
-R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS).show()
+R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS, couplage=COUPLAGE).show()
 """
     return _build(titre, corps)
 
 
-def gen_fissuration_exp(cube, segs, dates, theta, de, refit, params) -> str:
+def gen_fissuration_exp(cube, segs, dates, theta, de, refit, params, couplage=None) -> str:
     """Script autonome : retrait + décomposition exponentielle (shear lag). Embarque fit_retrait.py,
     fissuration_gaussiennes.py (lecture des données), fissuration_cisaillement.py et retrait_3d.py ; `params` = réglages de l'onglet."""
     titre = "Fissuration : retrait + décomposition exponentielle (shear lag)"
@@ -746,7 +760,9 @@ CUBE = {cube!r}
 SEGMENTS = {list(segs)!r}
 DATES = {[round(float(t), 3) for t in dates]!r}     # échéances (jours écoulés) ; le retrait est peu fiable avant ~28 j
 DE = {float(de)!r}                                    # D_e (m2/s)
-THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, beta, alpha_crit (fit C12)
+THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, beta, alpha_crit (fit C12) ; en mode couplage : N, k, a, n, c, p
+COUPLAGE_FW = {couplage is not None!r}                # True : D_eff = D_e (1 + c (w/100 µm)^p) piloté par les données, au lieu du dommage en alpha
+COUPLAGE = {_txt_couplage(couplage)}   # (dates, w en µm) de w(t) estimé sur les mesures ; None : recalculé
 REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n, beta, alpha_crit) sur le cube (~10 s)
 GROUPE_MM = {float(params.get("groupe", 8.0))!r}      # regroupement a posteriori des fissures voisines
 # Réglages de la méthode exponentielle (voir la théorie de l'onglet) :
@@ -762,13 +778,18 @@ PARAMS_EXP["interdites"] = S._liste(PARAMS_EXP.get("interdites", ""))
 # ===================== Calcul =====================
 F.CSV = {{CUBE: CSV_PATH}}
 g_prep = F.prepare(CUBE, bin_mm=1)                    # données allégées (même pas que l'analyse de fissuration)
-if REAJUSTER_RETRAIT:
+if COUPLAGE_FW and (REAJUSTER_RETRAIT or COUPLAGE is None):
+    THETA, COUPLAGE = F.ajuster_couplage(F.prepare(CUBE), DE, THETA)
+    THETA = list(THETA)
+elif REAJUSTER_RETRAIT:
     THETA = list(F.ajuster(F.prepare(CUBE), DE))
-print("retrait : " + " ".join(f"{{nm}}={{v:.3g}}" for nm, v in zip(F.PARAM_NOMS, THETA)))
+if not COUPLAGE_FW:
+    COUPLAGE = None
+print("retrait : " + " ".join(f"{{nm}}={{v:.3g}}" for nm, v in zip(F.PARAM_NOMS_FW if COUPLAGE_FW else F.PARAM_NOMS, THETA)))
 
 resultats = {{}}
 for seg in SEGMENTS:
-    h = G.donnees_segment(CUBE, seg, np.array(THETA), DE, g=g_prep)
+    h = G.donnees_segment(CUBE, seg, np.array(THETA), DE, g=g_prep, couplage=COUPLAGE)
     try:
         tab, hist, _ = S.analyser_segment(h, dates=np.array(DATES), **PARAMS_EXP)
     except (S.AucuneFissure, ValueError) as e:
@@ -791,7 +812,7 @@ for seg, (tab, hist) in resultats.items():
     S.figure_surface(tab, CUBE, seg).show()           # figure 3D : temps x position x ouverture w (µm) de chaque fissure
 
 # Retrait modélisé en 3D (isosurfaces, curseur de temps) avec les fibres choisies superposées
-R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS).show()
+R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS, couplage=COUPLAGE).show()
 """
     return _build(titre, corps)
 

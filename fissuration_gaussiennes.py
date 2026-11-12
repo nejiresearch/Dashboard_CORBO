@@ -137,14 +137,15 @@ class Suivi:
         return sse
 
 
-def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1, g=None):
-    """g : données déjà préparées par F.prepare (évite de relire le CSV, utile pour le dashboard)."""
+def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1, g=None, couplage=None):
+    """g : données déjà préparées par F.prepare (évite de relire le CSV, utile pour le dashboard).
+    couplage = (dates, w) : mode F(w) piloté par les données, theta = (N, k, a, n, c, p)."""
     if g is None:
         g = F.prepare(cube, bin_mm=bin_mm)
     h = g[g["segment"] == segment].copy()
     if h.empty:
         raise SystemExit(f"segment {segment} absent (ou exclu) pour {cube}")
-    h["mod"] = F.modele(theta, h, de)
+    h["mod"] = F.modele(theta, h, de, couplage)
     h["r"] = h["eps"] - h["mod"]
     return h
 
@@ -416,6 +417,7 @@ if __name__ == "__main__":
                     help="paramètres du retrait N k a n [beta alpha_crit] (défaut : fit C12, D_e = 3,7e-7 m2/s)")
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT, help="D_e utilisé avec --theta (m2/s)")
     ap.add_argument("--refit", action="store_true", help="ré-ajuste le retrait sur le cube (≈ 10 s)")
+    ap.add_argument("--couplage", action="store_true", help="ajuste le retrait avec le couplage F(w) piloté par les données (≈ 30 s)")
     ap.add_argument("--avant", action="store_true", help="ancien ordre chronologique (centres déterminés à t0)")
     ap.add_argument("--fusion", action="store_true", help="autorise la fusion (déconseillé)")
     ap.add_argument("--sans-regul", action="store_true", help="pas d'ajustement global régularisé (option D)")
@@ -425,10 +427,14 @@ if __name__ == "__main__":
 
     warnings.filterwarnings("ignore")
     theta = np.array(args.theta if args.theta else THETA_DEFAUT)
-    if args.refit:
+    couplage = None
+    if args.couplage:
+        theta, couplage = F.ajuster_couplage(F.prepare(args.cube), args.de, theta)
+    elif args.refit:
         theta = F.ajuster(F.prepare(args.cube), args.de)
-    print(f"retrait : " + " ".join(f"{nm}={v:.3g}" for nm, v in zip(F.PARAM_NOMS, theta)) + f" (D_e={args.de:.1e})")
-    h = donnees_segment(args.cube, args.segment, theta, args.de)
+    noms = F.PARAM_NOMS_FW if couplage is not None else F.PARAM_NOMS
+    print(f"retrait : " + " ".join(f"{nm}={v:.3g}" for nm, v in zip(noms, theta)) + f" (D_e={args.de:.1e})")
+    h = donnees_segment(args.cube, args.segment, theta, args.de, couplage=couplage)
     tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion, regul=not args.sans_regul,
                        t_calage=args.t_calage)
     tab = groupes(tab)

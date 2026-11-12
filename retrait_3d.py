@@ -17,10 +17,14 @@ N_DATES = 12       # nombre d'images de l'animation
 NIVEAUX = 4        # nombre d'isosurfaces
 
 
-def champ_retrait(theta, de: float, dates, n: int = N_GRILLE):
+def champ_retrait(theta, de: float, dates, n: int = N_GRILLE, couplage=None):
     """Retourne (x, y, z, eps) : x, y, z (mm) vecteurs 1D de la grille, eps (µε) de forme (len(dates), n, n, n)."""
-    N, k, a, ex, beta, alpha_crit = (list(theta) + [0.0, 0.3][len(theta) - 4:])[:6]
-    A = F.alpha_1d(N, k, de, beta, alpha_crit)
+    if couplage is None:
+        N, k, a, ex, beta, alpha_crit = (list(theta) + [0.0, 0.3][len(theta) - 4:])[:6]
+        A = F.alpha_1d(N, k, de, beta, alpha_crit)
+    else:                                  # couplage F(w) : theta = (N, k, a, n, c, p)
+        N, k, a, ex, c, p = theta
+        A = F.alpha_1d(N, k, de, 0.0, 0.3, mult_t=F.facteur_fw(couplage, c, p))
     p = np.linspace(0.0, F.L, n)
     X, Y, Z = np.meshgrid(p, p, p, indexing="ij")
     eps = np.empty((len(dates), n, n, n))
@@ -49,12 +53,12 @@ def _fibres(g: pd.DataFrame, segments, t: float, vmin: float):
 
 
 def figure_retrait_3d(theta, de: float, dates, cube: str, g: pd.DataFrame | None = None, segments=(),
-                      n: int = N_GRILLE, n_dates: int = N_DATES):
+                      n: int = N_GRILLE, n_dates: int = N_DATES, couplage=None):
     """Isosurfaces du retrait modélisé, animées (curseur de temps). Fibres mesurées superposées si `segments` est donné."""
     dates = np.asarray(sorted(dates), float)
     if len(dates) > n_dates:
         dates = dates[np.unique(np.linspace(0, len(dates) - 1, n_dates).round().astype(int))]
-    x, y, z, eps = champ_retrait(theta, de, dates, n)
+    x, y, z, eps = champ_retrait(theta, de, dates, n, couplage)
     X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
     vmin = float(min(eps.min(), -1.0))
     niveaux = dict(isomin=0.9 * vmin, isomax=0.1 * vmin, surface_count=NIVEAUX)

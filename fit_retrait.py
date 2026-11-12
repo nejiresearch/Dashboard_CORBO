@@ -15,8 +15,16 @@ Modèle (réaction-diffusion couplée)
 
 Endommagement : D_eff = D_e * (1 + beta * max(0, alpha - alpha_crit)**m) (m fixé).
 
+Couplage F(w) piloté par les données (alternative, mode « couplage ») : la diffusion dépend de
+l'ouverture cumulée des fissures mesurée, et non plus de alpha :
+      D_eff(t) = D_e * (1 + c * (w(t) / W_REF)**p)
+w(t) (µm) = somme des ouvertures par fibre, estimée par la mesure (intégrale de l'écart mesure - retrait
+sur la fibre), moyenne des fibres, rendue croissante (fissures irréversibles). Le dommage en alpha est
+alors désactivé (beta = 0) ; theta = (N, k, a, n, c, p). Comme w dépend du retrait ajusté, on itère
+(ajuster_couplage : retrait -> w -> ajustement -> w ...).
+
 Paramètres ajustés : N (mol CO2 / m3, capacité de fixation), k (1/jour), a (µε), n,
-beta, alpha_crit.
+beta, alpha_crit (ou c, p en mode couplage).
 Seul le rapport N / D_e est identifiable : N est proportionnel au D_e choisi.
 Si N est mesuré (ATG), on en déduit D_e = N * (D_e_ref / N_fit) avec les valeurs affichées.
 
@@ -58,9 +66,13 @@ NX = int(L / 2 / DX) + 1
 NSTEP = int(TMAX / DT)
 M_DOMMAGE = 2.0      # exposant de sensibilité m du dommage (fixé)
 PARAM_NOMS = ("N", "k", "a", "n", "beta", "alpha_crit")
+PARAM_NOMS_FW = ("N", "k", "a", "n", "c", "p")   # mode couplage F(w) : D_eff = D_e (1 + c (w/W_REF)^p)
+W_REF = 100.0        # µm, ouverture de référence de F(w)
 # N, k, beta, alpha_crit sont optimisés en espace logarithmique
 BORNES = ([np.log(5000), np.log(1e-3), 0.0, 0.3, np.log(1e-3), np.log(0.05)],
           [np.log(25000), np.log(5.0), 3e4, 4.0, np.log(1e3), np.log(0.99)])
+BORNES_FW = ([np.log(5000), np.log(1e-3), 0.0, 0.3, np.log(1e-3), 0.3],
+             [np.log(25000), np.log(5.0), 3e4, 4.0, np.log(1e3), 4.0])
 DEPARTS = ((5000, 0.05), (20000, 0.2), (8000, 0.02))  # (N0, k0)
 
 
@@ -84,11 +96,12 @@ def prepare(cube: str, n_dates: int = N_DATES, bin_mm: float = BIN_MM) -> pd.Dat
 
 
 def alpha_1d(N: float, k: float, De: float, beta: float, alpha_crit: float,
-             m: float = M_DOMMAGE) -> np.ndarray:
+             m: float = M_DOMMAGE, mult_t: np.ndarray | None = None) -> np.ndarray:
     """alpha(t, x) sur une demi-dalle [0, L/2], tableau (NSTEP+1, NX).
 
     D_eff(x, t) = De * (1 + beta * max(0, alpha - alpha_crit)**m) : la fissuration
-    (liée à la carbonatation locale) accélère la diffusion du CO2."""
+    (liée à la carbonatation locale) accélère la diffusion du CO2.
+    mult_t (NSTEP,) : facteur (1 + F(w(t))) du couplage piloté par les données, appliqué à tout x."""
     al = np.zeros(NX)
     out = np.zeros((NSTEP + 1, NX))
     ab = np.zeros((3, NX))
@@ -96,6 +109,8 @@ def alpha_1d(N: float, k: float, De: float, beta: float, alpha_crit: float,
     rhs = np.zeros(NX); rhs[0] = 1.0
     for s in range(NSTEP):
         d_eff = De * (1 + beta * np.maximum(0.0, al - alpha_crit) ** m)   # vecteur, taille NX
+        if mult_t is not None:
+            d_eff = d_eff * mult_t[s]
         lam = N * (k / 86400.0) * (1 - al) / (d_eff * C0)
         ab[1] = 2 * h + lam
         ab[0, 1:] = -h
@@ -123,18 +138,53 @@ def alpha_3d(A, X, Y, Z, t_jours):
     return 1 - reste
 
 
-def modele(theta, g: pd.DataFrame, De: float = DE_DEFAUT) -> np.ndarray:
-    """Retrait de la matrice (µε) aux points de g, theta = (N, k, a, n, beta, alpha_crit)."""
-    N, k, a, n, beta, alpha_crit = (list(theta) + [0.0, 0.3][len(theta) - 4:])[:6]   # 4 valeurs : sans dommage
-    A = alpha_1d(N, k, De, beta, alpha_crit)
+def facteur_fw(couplage, c: float, p: float) -> np.ndarray:
+    """1 + F(w(t)) sur la grille de temps du modèle ; couplage = (dates, w en µm), w croissant."""
+    dates, w = couplage
+    w_t = np.interp(np.arange(NSTEP) * DT, np.asarray(dates, float), np.asarray(w, float))
+    return 1 + c * (w_t / W_REF) ** p
+
+
+def modele(theta, g: pd.DataFrame, De: float = DE_DEFAUT, couplage=None) -> np.ndarray:
+    """Retrait de la matrice (µε) aux points de g.
+
+    Sans couplage : theta = (N, k, a, n, beta, alpha_crit).
+    Avec couplage = (dates, w) : theta = (N, k, a, n, c, p), D_eff = D_e (1 + c (w/W_REF)^p)."""
+    if couplage is None:
+        N, k, a, n, beta, alpha_crit = (list(theta) + [0.0, 0.3][len(theta) - 4:])[:6]   # 4 valeurs : sans dommage
+        A = alpha_1d(N, k, De, beta, alpha_crit)
+    else:
+        N, k, a, n, c, p = theta
+        A = alpha_1d(N, k, De, 0.0, 0.3, mult_t=facteur_fw(couplage, c, p))
     alpha = alpha_3d(A, g["X"].values, g["Y"].values, g["Z"].values, g["temps_ecoule_j"].values)
     return -a * alpha ** n
 
 
-def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE) -> np.ndarray:
-    """Ajustement de l'enveloppe basse (perte asymétrique), multi-départs sur (N, k)."""
+def ouverture_donnees(g: pd.DataFrame, theta, De: float = DE_DEFAUT, couplage=None):
+    """w(t) estimée à partir des mesures : par fibre et par date, intégrale de (mesure - retrait) le long
+    de la fibre (= somme des ouvertures), puis moyenne des fibres. Retourne (dates, w en µm) avec w >= 0
+    croissant (fissures irréversibles) et w(0) = 0."""
+    h = g.assign(res=g["eps"].values - modele(theta, g, De, couplage))
+    lignes = []
+    for (seg, t), q in h.groupby(["segment", "temps_ecoule_j"]):
+        axe = q["axe_mesure"].iloc[0]
+        longueur = float(q[axe].max() - q[axe].min()) * 1000       # mm
+        lignes.append((t, max(float(q["res"].mean()), 0.0) * longueur * 1e-3))   # µε x mm -> µm
+    w = pd.DataFrame(lignes, columns=["t", "w"]).groupby("t")["w"].mean().sort_index()
+    return (np.concatenate([[0.0], w.index.values]),
+            np.concatenate([[0.0], np.maximum.accumulate(w.values)]))
+
+
+def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE, couplage=None) -> np.ndarray:
+    """Ajustement de l'enveloppe basse (perte asymétrique), multi-départs sur (N, k).
+    Avec couplage = (dates, w) : les deux derniers paramètres sont (c, p) au lieu de (beta, alpha_crit)."""
     eps = g["eps"].values
     etat = {"n": 0, "t0": time.time(), "depart": 0}
+    fw = couplage is not None
+    bornes, fin0 = (BORNES_FW, [np.log(1.0), 1.0]) if fw else (BORNES, [np.log(1.0), np.log(0.3)])
+
+    def vers_theta(q):
+        return [np.exp(q[0]), np.exp(q[1]), q[2], q[3], np.exp(q[4]), q[5] if fw else np.exp(q[5])]
 
     def residus(q):
         etat["n"] += 1
@@ -142,39 +192,52 @@ def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE) -> np.
         sys.stderr.write(f"\r  départ {etat['depart']}/{len(DEPARTS)} | évaluations : "
                          f"{etat['n']} | écoulé : {ecoule:.0f} s")
         sys.stderr.flush()
-        r = modele([np.exp(q[0]), np.exp(q[1]), q[2], q[3], np.exp(q[4]), np.exp(q[5])],
-                   g, De) - eps
+        r = modele(vers_theta(q), g, De, couplage) - eps
         return np.where(r < 0, np.sqrt(w) * r, r)   # r < 0 : mesure au-dessus du modèle
 
     meilleur = None
     for i, (N0, k0) in enumerate(DEPARTS, 1):
         etat["depart"] = i
-        r = least_squares(residus, [np.log(N0), np.log(k0), 6000.0, 1.0, np.log(1.0), np.log(0.3)],
-                          bounds=BORNES, x_scale=[1, 1, 1000, 1, 1, 1], diff_step=1e-3)
+        r = least_squares(residus, [np.log(N0), np.log(k0), 6000.0, 1.0] + fin0,
+                          bounds=bornes, x_scale=[1, 1, 1000, 1, 1, 1], diff_step=1e-3)
         if meilleur is None or r.cost < meilleur.cost:
             meilleur = r
     sys.stderr.write("\n")
-    q = meilleur.x
-    return np.array([np.exp(q[0]), np.exp(q[1]), q[2], q[3], np.exp(q[4]), np.exp(q[5])])
+    return np.array(vers_theta(meilleur.x))
 
 
-def bilan(theta, g: pd.DataFrame, De: float, label: str) -> None:
-    r = modele(theta, g, De) - g["eps"].values
+def ajuster_couplage(g: pd.DataFrame, De: float = DE_DEFAUT, theta_ref=None, iterations: int = 2,
+                     w: float = W_FISSURE):
+    """Couplage F(w) piloté par les données. Point fixe : w(t) mesuré avec le retrait courant, ajustement
+    de (N, k, a, n, c, p), puis w(t) recalculé avec ce nouveau retrait. theta_ref (6 valeurs, dommage en alpha)
+    initialise w ; s'il est absent, un ajustement standard est fait d'abord.
+    Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w en µm))."""
+    ref = np.asarray(ajuster(g, De, w) if theta_ref is None else theta_ref, float)
+    couplage, theta = None, ref
+    for _ in range(max(iterations, 1)):
+        couplage = ouverture_donnees(g, theta, De, couplage)
+        theta = ajuster(g, De, w, couplage)
+    return theta, couplage
+
+
+def bilan(theta, g: pd.DataFrame, De: float, label: str, couplage=None) -> None:
+    r = modele(theta, g, De, couplage) - g["eps"].values
     sous = r[r >= 0]
     print(f"{label}: n={len(g)} | part mesure>modèle={np.mean(r < 0):.2f} | "
           f"RMSE (mesure<modèle)={np.sqrt(np.mean(sous ** 2)):.0f} µε")
 
 
-def tracer(theta, De: float, cube: str, segments, fichier: str) -> None:
+def tracer(theta, De: float, cube: str, segments, fichier: str, couplage=None) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     g = prepare(cube, bin_mm=2)
-    N, k, a, n, beta, alpha_crit = theta
+    N, k, a, n, beta, alpha_crit = theta   # (c, p) en mode couplage
     txt = (f"Modèle couplé (fit global C12)\nD_e = {De:.1e} m²/s (fixé)\nN = {N:.0f} mol/m³\n"
            f"k = {k:.3f} j⁻¹\na = {a:.0f} µε\nn = {n:.2f}\n"
-           f"β = {beta:.3g}\nα_crit = {alpha_crit:.2f}\nm = {M_DOMMAGE:g} (fixé)")
+           + (f"c = {beta:.3g}\np = {alpha_crit:.2f}\nF(w) = c (w / {W_REF:g} µm)^p" if couplage is not None else
+              f"β = {beta:.3g}\nα_crit = {alpha_crit:.2f}\nm = {M_DOMMAGE:g} (fixé)"))
     couleurs = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"]
     segments = [s for s in segments if s in set(g["segment"])]
     ncol = min(4, len(segments)); nrow = int(np.ceil(len(segments) / ncol))
@@ -185,7 +248,7 @@ def tracer(theta, De: float, cube: str, segments, fichier: str) -> None:
         for i, c in zip([int(m * .25), int(m * .5), int(m * .75), m - 1], couleurs):
             q = h[h["temps_ecoule_j"] == ts[i]].sort_values("xb")
             ax.plot(q[axe] * 1000, q["eps"], color=c, lw=.8, alpha=.7, label=f"{ts[i]:.0f} j")
-            ax.plot(q[axe] * 1000, modele(theta, q, De), color=c, lw=2.2, ls="--")
+            ax.plot(q[axe] * 1000, modele(theta, q, De, couplage), color=c, lw=2.2, ls="--")
         ax.set_title(f"{cube} {s} — axe {axe}", fontsize=10)
         ax.set_xlabel(f"{axe} (mm)"); ax.set_ylabel("µε"); ax.grid(alpha=.3); ax.set_xlim(0, 100)
         ax.text(.5, .02, txt, transform=ax.transAxes, fontsize=6.5, ha="center", va="bottom",
@@ -201,17 +264,26 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cube", choices=["C12", "C34"], default="C12", help="cube ajusté")
     ap.add_argument("--de", type=float, default=DE_DEFAUT, help="D_e fixé (m2/s)")
+    ap.add_argument("--couplage", action="store_true",
+                    help="couplage F(w) piloté par les données : D_eff = D_e (1 + c (w/100 µm)^p) au lieu du dommage en alpha")
     ap.add_argument("--plot", help="fichier PNG des profils (segments d'intérêt)")
     args = ap.parse_args()
 
     g = prepare(args.cube)
-    theta = ajuster(g, args.de)
+    couplage = None
+    if args.couplage:
+        theta, couplage = ajuster_couplage(g, args.de)
+    else:
+        theta = ajuster(g, args.de)
     print(f"{args.cube} (D_e = {args.de:.1e} m2/s) : "
-          + ", ".join(f"{nm}={v:.3g}" for nm, v in zip(PARAM_NOMS, theta)))
+          + ", ".join(f"{nm}={v:.3g}" for nm, v in zip(PARAM_NOMS_FW if args.couplage else PARAM_NOMS, theta)))
     print(f"  rapport N/D_e = {theta[0] / args.de:.3g} (mol/m3)/(m2/s) : identifiable, N dépend de D_e")
-    bilan(theta, g, args.de, f"  ajustement {args.cube}")
+    bilan(theta, g, args.de, f"  ajustement {args.cube}", couplage)
     autre = "C34" if args.cube == "C12" else "C12"
-    bilan(theta, prepare(autre), args.de, f"  validation {autre} (mêmes paramètres)")
+    g2 = prepare(autre)
+    # validation : mêmes paramètres, w(t) propre à l'autre cube (estimé sur ses mesures)
+    bilan(theta, g2, args.de, f"  validation {autre} (mêmes paramètres)",
+          None if couplage is None else ouverture_donnees(g2, theta, args.de, couplage))
     if args.plot:
-        tracer(theta, args.de, args.cube, ["s14", "s17", "s19", "s21", "s22", "s4", "s3", "s1"], args.plot)
+        tracer(theta, args.de, args.cube, ["s14", "s17", "s19", "s21", "s22", "s4", "s3", "s1"], args.plot, couplage)
         print("figure :", args.plot)
