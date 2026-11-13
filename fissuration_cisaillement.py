@@ -71,7 +71,6 @@ N_MAX = 25
 
 # Presets « câble / pose » (OBRstudio). inv_lambda_mm : 1/λ imposé du câble. Le cœur est borné à A_CUBE_MM.
 PRESETS = {
-    "peek_cobra_beton":       dict(inv_lambda_mm=10.5, coeur_max_mm=200, portee_max_mm=300, plafond_mm=2.0, cod_min_um=10, jauge_mm=4),
     "polyimide_nue_beton":    dict(coeur_max_mm=25, portee_max_mm=30, plafond_mm=0.5, cod_min_um=2, jauge_mm=1),
     "polyimide_collee_epoxy": dict(coeur_max_mm=5, portee_max_mm=10, plafond_mm=0.2, cod_min_um=0.5, jauge_mm=0.5),
 }
