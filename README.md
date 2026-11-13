@@ -14,7 +14,7 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 - 2 fibres optiques par cube, placées symétriquement par rapport au plan central (z = 5 cm).
 - Chaque fibre est enrobée dans le bloc par segments tendus, ce qui donne la déformation dans la direction du segment.
 - Les segments **s1, s2, s3** sont orientés selon **z** et appartiennent à l'une des deux fibres. Les autres segments sont dans le plan XY.
-- Dans chaque moitié de cube : 3 plans de fibres XY, à **8 mm, 16 mm et 30 mm** de l'interface.
+- Dans chaque moitié de cube : 3 plans de fibres XY, à **8 mm, 16 mm et 30 mm** de la face Z la plus proche (Z ≈ 8, 16 et 30 mm d'un côté ; Z ≈ 92, 84 et 70 mm de l'autre, d'après les coordonnées des CSV).
 
 ### Orientation du cube dans l'enceinte
 
@@ -76,7 +76,7 @@ Observations (microdéformations médianes, essai de 113 jours) :
 - Ce n'est pas un artefact de fibre : s1 et s3 sont sur la même fibre V2 et montrent les deux comportements.
 - Segments du côté Z fort de C12 (fibre V2, Z > 50 mm) : s4 à s12.
   - s6 à s12 (Z ≥ 84 mm) se contractent peu : de +460 à −1300 µε, et s10, s11 et s12 sont proches de 0.
-  - s4 et s5 (Z = 70 mm, plan à 30 mm de l'interface) se comportent comme leurs homologues symétriques s22 et s23 (Z = 30 mm) : corrélation de 0,97 à 0,99 sur toute la durée, et −890 à −1970 µε contre −1060 à −1220 µε. Le comportement de C34 aux mêmes positions est cohérent (environ −1000 µε).
+  - s4 et s5 (Z = 70 mm, plan à 30 mm de la face Z = 100 mm) se comportent comme leurs homologues symétriques s22 et s23 (Z = 30 mm) : corrélation de 0,97 à 0,99 sur toute la durée, et −890 à −1970 µε contre −1060 à −1220 µε. Le comportement de C34 aux mêmes positions est cohérent (environ −1000 µε).
 - Le côté Z faible de C12 (fibre V1, Z < 50 mm, segments s14 à s23) se comporte comme C34 aux mêmes profondeurs.
 
 Cause à déterminer. L'hypothèse initiale (fond du bac peu accessible au CO₂) ne tient plus, car l'asymétrie est selon Z (horizontal).
@@ -124,7 +124,7 @@ python fit_retrait.py --plot fit_C12.png
 
 - Modèle (réaction-diffusion couplée) : le CO₂ diffuse depuis les six faces avec un D_e **fixé** (littérature : 2·10⁻⁷ à 7·10⁻⁷ m²/s, option `--de`) et est consommé par la réaction. Degré de carbonatation α (cinétique d'ordre 1, constante k), retrait ε = −a·α^n, capacité de fixation N (mol CO₂/m³). Résolution 1D en demi-dalle puis combinaison 3D approchée α = 1 − Π(1 − α_i).
 - **Couplage F(w) piloté par les données** (alternative au dommage en α, `--couplage` en ligne de commande ; case « Diffusion du CO₂ » de l'onglet 11) : D_eff(t) = D_e·(1 + c·(w(t)/100 µm)^p), w(t) = somme des ouvertures estimée sur les mesures (intégrale de l'écart mesure − retrait sur chaque fibre, moyenne des fibres, rendue croissante), facteur uniforme en x. `theta = (N, k, a, n, c, p)` (`PARAM_NOMS_FW`, bornes `BORNES_FW`). `alpha_1d(..., mult_t=)`, `modele(theta, g, De, couplage=(dates, w))`, `ouverture_donnees` (w(t)), `ajuster_couplage` (point fixe retrait → w → ajustement, ≈ 15–30 s) ; `couplage` est transmis à `donnees_segment`, `retrait_3d` et au générateur de scripts (variables `COUPLAGE_FW` / `COUPLAGE`). Résultat C12 : c ≈ 0,009, p à la borne (4), facteur final ≈ 1,07, RMSE inchangé (1049 µε) : les données n'indiquent pas d'accélération de la diffusion par la fissuration ; le choix par défaut reste le dommage en α.
-- **Endommagement** : D_eff(x,t) = D_e·(1 + β·max(0, α − α_crit)^m) (vecteur de taille NX recalculé à chaque pas, `alpha_1d(N, k, De, beta, alpha_crit, m)`), pour que la fissuration accélère la diffusion du CO₂. m est fixé (`M_DOMMAGE` = 2). Paramètres ajustés : `theta = (N, k, a, n, β, α_crit)` ; N, k, β et α_crit sont optimisés en espace logarithmique. `modele` accepte aussi un `theta` à 4 valeurs (β = 0, sans dommage). N est borné à 5 000–25 000 mol/m³ (calcite pure ≈ 27 100 mol/m³ ; à D_e fixé, N/D_e est identifiable, donc cette plage suppose D_e ≈ 3,7·10⁻⁷ m²/s). L'ajustement affiche un compteur (départ, évaluations, temps écoulé). Test sur C12 (enveloppe basse) : β et α_crit vont aux bornes (β ≈ 10⁻³, α_crit ≈ 0,99), sans gain de RMSE (1048 µε) : le dommage n'améliore pas l'ajustement actuel ; le défaut des scripts reste β = 0.
+- **Endommagement** : D_eff(x,t) = D_e·(1 + β·max(0, α − α_crit)^m) (vecteur de taille NX recalculé à chaque pas, `alpha_1d(N, k, De, beta, alpha_crit, m)`), pour que la fissuration accélère la diffusion du CO₂. m est fixé (`M_DOMMAGE` = 2). Paramètres ajustés : `theta = (N, k, a, n, β, α_crit)` ; N, k, β et α_crit sont optimisés en espace logarithmique. `modele` accepte aussi un `theta` à 4 valeurs (β = 0, sans dommage). N est borné à 5 000–25 000 mol/m³ (calcite pure ≈ 27 100 mol/m³ ; à D_e fixé, N/D_e est identifiable, donc cette plage suppose D_e ≈ 3,7·10⁻⁷ m²/s). L'ajustement affiche un compteur (départ, évaluations, temps écoulé). Test sur C12 (enveloppe basse) : α_crit va à sa borne haute (≈ 0,99), ce qui rend le dommage inactif ; β n'est alors pas identifiable (≈ 10⁻³ lors d'un premier essai, ≈ 420 lors d'un essai ultérieur, pour le même RMSE de 1047–1048 µε). Le dommage n'améliore pas l'ajustement actuel ; le défaut des scripts reste β = 0. Durée de l'ajustement à 6 paramètres : de l'ordre de 10 s à 1 min selon la machine.
 - Seul le rapport N/D_e est identifiable : N est proportionnel à D_e (D_e = 3,7·10⁻⁷ → N ≈ 23 300 ; 2·10⁻⁷ → 12 600 ; 7·10⁻⁷ → 44 000 mol/m³). Une mesure de N (ATG) fixe donc D_e.
 - La déformation mesurée est la somme du retrait de la matrice et de l'ouverture de fissures (≥ 0). On ajuste l'enveloppe basse, avec un poids de 0,1 sur les résidus où la mesure est au-dessus du modèle (fissures).
 - Les segments C12 s6 à s12 sont exclus. Les points hors du cube sont ignorés.
@@ -133,8 +133,27 @@ python fit_retrait.py --plot fit_C12.png
 
 ## Fissuration : démarche envisagée (à reprendre)
 
-> **Jauge OBR : 2 mm, recouvrement 50 % (pas de 1 mm).** Les résultats chiffrés de cette section ont été obtenus avec une jauge supposée de 5 mm (`JAUGE_MM`, `S_MIN`) ; ils sont à réévaluer.
-> Impact mesuré (C12/C34 s14, échéances ≥ 28 j, 1 sur 3) : Σw quasi inchangée (gaussiennes 274 → 270 µm sur C12 s14, 285 → 285 sur C34 s14 ; shear lag 313 → 307 et 336 → 328 µm). RMSE en baisse (gaussiennes C12 s14 900 → 809 µε ; shear lag 1437 → 1142 et 1150 → 1006 µε). Plus de fissures séparées (C12 s14 : gaussiennes 11 → 13, shear lag 7 → 11). λ médian du shear lag 1000 → 2460 m⁻¹ (C12) : il ne colle plus à la borne.
+> **Jauge OBR : 2 mm, recouvrement 50 % (pas de 1 mm).** Le code utilise cette jauge (`JAUGE_MM` = 2, `S_MIN` = 2/√12 ≈ 0,58 mm). Une partie des chiffres ci-dessous date d'une jauge supposée de 5 mm : chaque résultat porte la mention **[jauge 5 mm]** ou **[jauge 2 mm]**. Les résultats [jauge 5 mm] ne sont pas recalculés ; ils restent indicatifs.
+
+### Jauge : ce qu'elle change et ce qui reste robuste
+
+- **Pas d'échantillonnage et résolution** : un point tous les 1 mm, mais chaque point est une moyenne sur 2 mm. Les points voisins partagent la moitié de leur fenêtre : leurs bruits sont corrélés.
+- **Où la jauge intervient** : largeur minimale d'une gaussienne (σ_min = Lg/√12, soit 1,44 mm à 5 mm et 0,58 mm à 2 mm), borne du shear lag (λ ≤ 5/Lg, soit 1000 m⁻¹ à 5 mm et 2500 m⁻¹ à 2 mm), et forme du noyau (moyenné sur la jauge). Le fit du retrait (`fit_retrait.py`) n'utilise pas la jauge ; seul le résidu en dépend.
+- **Comparaison 5 mm → 2 mm** (s14 de C12 et de C34, échéances ≥ 28 j, 1 sur 3) :
+
+| Grandeur | Jauge 5 mm → 2 mm |
+|---|---|
+| Σw gaussiennes | 274 → 270 µm (C12), 285 → 285 µm (C34) |
+| Σw shear lag | 313 → 307 µm (C12), 336 → 328 µm (C34) |
+| RMSE gaussiennes | 900 → 809 µε (C12) |
+| RMSE shear lag | 1437 → 1142 µε (C12), 1150 → 1006 µε (C34) |
+| Nombre de fissures (C12) | 11 → 13 (gaussiennes), 7 → 11 (shear lag) |
+| λ médian du shear lag (C12) | 1000 → 2460 m⁻¹ (borne : 1000 → 2500 m⁻¹) |
+
+- **Σw est robuste vis-à-vis de la jauge** (moins de 3 % d'écart) : l'aire d'un pic moyenné reste égale à l'ouverture. Σw n'est pas pour autant une valeur absolue : sur C12 s14 elle varie d'environ 10 % selon la méthode (≈ 270 µm en gaussiennes, ≈ 300 µm en shear lag) et selon la régularisation (≈ 245 µm sans, ≈ 270 µm avec, essais à 5 mm), et elle dépend directement du retrait ajusté en enveloppe basse, puisque c'est l'intégrale du résidu.
+- **Le nombre, la position et la largeur des fissures ne sont pas robustes** : le nombre passe de 7 à 11 en changeant seulement la jauge, et il dépend aussi des seuils (gain de SSE minimal, proéminence, distance minimale entre centres). Ne pas en déduire une densité ou un espacement de fissures.
+- **λ colle toujours à sa borne**, simplement relevée de 1000 à 2500 m⁻¹. Sur C12 s14 **[jauge 2 mm]** (`--multi`, 28 → 113 j, dernière échéance) : λ médian 2495 m⁻¹, 6 fissures sur 11 à la borne, qui portent 42 % de Σw ; les 5 autres vont de 237 à 2241 m⁻¹. Pour les fissures à la borne, 1/λ = 0,4 mm est sous la résolution et c'est le cœur `a` qui prend la largeur (jusqu'à 10,6 mm pour un maximum de 12) : le noyau dégénère en triangle. λ n'est donc pas identifiable à 2 mm non plus.
+- **La baisse du RMSE ne valide pas le modèle** : elle est attendue avec plus de fissures libres. Le RMSE reste à 800–1100 µε, très au-dessus du bruit instrumental (≈ 25–40 µε), car l'erreur du modèle de retrait domine.
 
 État : réflexion, premier essai exploratoire (niveau 1) puis décomposition en gaussiennes implémentée dans `fissuration_gaussiennes.py` (voir plus bas).
 
@@ -146,7 +165,7 @@ La fibre mesure la déformation moyenne sur une jauge Lg : matrice (retrait) + o
 2. **Endommagement phénoménologique** D(x,t) ∈ [0,1], piloté par la traction due au retrait gêné (σ_t ≈ E·(ε_cœur − ε_peau)/(1−ν) > f_t), qui réduit le retrait et ajoute l'ouverture. Calage de 2–3 paramètres (f_t, loi d'évolution) sur le niveau 1.
 3. **Fissuration explicite** (EF, endommagement ou zones cohésives) : en dernier, vu la densité de fissures.
 
-### Premier essai (niveau 1, tous les segments retenus)
+### Premier essai (niveau 1, tous les segments retenus) [seuil simple, sans noyau de jauge]
 Résidu moins une base locale (quantile 20 % sur 30 mm), seuil 3σ avec σ ≥ 100 µε, jauge supposée Lg = 2 mm, 40 dates.
 
 Résultats exploitables :
@@ -172,7 +191,7 @@ Limites :
 ```bash
 python fissuration_gaussiennes.py --cube C12 --segment s14 --plot s14.png --csv s14.csv
 ```
-Options : `--t0` (première échéance, 28 j par défaut), `--theta N k a n [β α_crit]` et `--de` (retrait), `--refit` (ré-ajuste le retrait sur le cube, ~10 s). Durée : ~10 s par segment.
+Options : `--t0` (première échéance, 28 j par défaut), `--theta N k a n [β α_crit]` et `--de` (retrait), `--refit` (ré-ajuste le retrait sur le cube, 10 s à 1 min selon la machine). Durée : ~10 s par segment.
 
 **Pourquoi des gaussiennes.** La fibre OBR moyenne la déformation sur une jauge de 2 mm (recouvrement 50 %, pas de 1 mm ; bruit corrélé entre points voisins) : une fissure de largeur w apparaît comme un pic étalé, pas comme un point. L'**aire** du pic reste égale à l'ouverture, w = ∫ε dx, indépendamment de la jauge. On modélise donc le résidu r(x,t) = ε_mesuré − ε_retrait par
 
@@ -191,15 +210,17 @@ Options : `--avant` (ancien ordre chronologique, centres déterminés à t0) et 
 
 Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAIN`, `A_MIN`, `GROUPE_MM`, `MERGE_TOL`, `LAMBDA_SIGMA`.
 
-**Résultat (C12 s14, 28 → 113 j, ordre inverse).** 11 gaussiennes suivies, centres stables à X ≈ 7, 23, 32, 42, 51, 58, 68, 81, 86 et 100 mm. Les pics voisins à X ≈ 42, 51, 58 et 68 mm restent séparés à toutes les dates. Σw ≈ 187 µm à 29 j, ≈ 233 µm à 52 j, ≈ 245 µm à 100–113 j. Dernier état : groupe central X = 51–68 mm ≈ 145 µm, pic isolé à 42 mm ≈ 54 µm. RMSE de 890 µε (29 j) à 950 µε (50 j) puis ≈ 930 µε : moins bonne aux premières dates qu'avec l'ordre chronologique (550 µε à 29 j), car le nombre de gaussiennes est fixé par la dernière échéance.
+**Résultat [jauge 5 mm] (C12 s14, 28 → 113 j, ordre inverse).** 11 gaussiennes suivies, centres stables à X ≈ 7, 23, 32, 42, 51, 58, 68, 81, 86 et 100 mm. Les pics voisins à X ≈ 42, 51, 58 et 68 mm restent séparés à toutes les dates. Σw ≈ 187 µm à 29 j, ≈ 233 µm à 52 j, ≈ 245 µm à 100–113 j. Dernier état : groupe central X = 51–68 mm ≈ 145 µm, pic isolé à 42 mm ≈ 54 µm. RMSE de 890 µε (29 j) à 950 µε (50 j) puis ≈ 930 µε : moins bonne aux premières dates qu'avec l'ordre chronologique (550 µε à 29 j), car le nombre de gaussiennes est fixé par la dernière échéance.
 
-**Effet de la régularisation (s14).** wᵢ(t) croît puis se stabilise, σᵢ(t) varie lentement (plus de sauts), les pics à X ≈ 42, 51 et 58 mm restent séparés (≈ 54 µm à 42 mm). Σw ≈ 154 µm à 29 j, ≈ 240 µm à 54 j, ≈ 270 µm vers 90 j puis stable. RMSE à 29 j ≈ 886 µε, équivalent à l'ordre inverse seul (890) : le gain obtenu en ne contraignant que Aᵢ (791 µε) disparaît quand on contraint wᵢ. Σw est plus élevé (≈ 270 µm) que sans régularisation (≈ 245 µm).
+**Effet de la régularisation [jauge 5 mm] (s14).** wᵢ(t) croît puis se stabilise, σᵢ(t) varie lentement (plus de sauts), les pics à X ≈ 42, 51 et 58 mm restent séparés (≈ 54 µm à 42 mm). Σw ≈ 154 µm à 29 j, ≈ 240 µm à 54 j, ≈ 270 µm vers 90 j puis stable. RMSE à 29 j ≈ 886 µε, équivalent à l'ordre inverse seul (890) : le gain obtenu en ne contraignant que Aᵢ (791 µε) disparaît quand on contraint wᵢ. Σw est plus élevé (≈ 270 µm) que sans régularisation (≈ 245 µm).
+
+**Résultat [jauge 2 mm] (C12 s14, échéances de 28 à 113 j parmi les 40 dates retenues, ordre inverse, régularisation).** 13 gaussiennes. Groupes à la dernière échéance : X = 7–11 mm (2 gaussiennes, 21 µm), 23–32 mm (3, 22 µm), 42 mm (1, 54 µm), 51–69 mm (4, 145 µm), 81–86 mm (2, 26 µm), 100 mm (1, 4 µm) ; Σw ≈ 270 µm. À 28,7 j : Σw ≈ 143 µm, RMSE ≈ 820 µε. Le groupe central (≈ 145 µm) et le pic isolé à 42 mm (≈ 54 µm) sont inchangés par rapport à la jauge de 5 mm. Aucun wᵢ(t) ne décroît.
 
 **Limites et points ouverts**
 - Les premières dates sont moins bien ajustées (centres issus de la dernière échéance, pas d'ajout à rebours) ; une fissure absente à 113 j mais présente plus tôt ne serait pas vue. Une gaussienne peut aussi être trop large à une échéance tardive pour en représenter plusieurs plus tôt (ex. zone X ≈ 10 mm de s14 : une seule gaussienne là où deux ou trois pourraient être distinguées).
-- Quelques wᵢ(t) baissent encore légèrement après ~90 j malgré la contrainte (cause non investiguée).
+- [jauge 5 mm] Quelques wᵢ(t) baissaient encore légèrement après ~90 j malgré la contrainte (cause non investiguée) ; ce n'est plus observé sur C12 s14 à 2 mm.
 - Le partage de w entre gaussiennes qui se chevauchent est incertain ; seul Σw est robuste. Les pics plus étroits que la jauge ont un σ mal contraint (seule l'aire est fiable).
-- Le seuil de détection n'est pas relié à un bruit estimé : l'erreur du modèle de retrait (centaines de µε, creux près des faces non captés) domine le bruit instrumental (≈ 25–40 µε avant 1,5 j). Un bruit estimé sur les dates tardives intègre déjà la fissuration (MAD des résidus : 17 µε à 0,8 j, 130 µε à 5 j). Un test de signification par pic (w/σ_w via le jacobien) rejette alors tous les pics discrets de s14 : seule la composante diffuse (σ 5–25 mm, ≈ 230 µm) est statistiquement robuste.
+- [jauge 5 mm pour le test de signification] Le seuil de détection n'est pas relié à un bruit estimé : l'erreur du modèle de retrait (centaines de µε, creux près des faces non captés) domine le bruit instrumental (≈ 25–40 µε avant 1,5 j). Un bruit estimé sur les dates tardives intègre déjà la fissuration (MAD des résidus : 17 µε à 0,8 j, 130 µε à 5 j). Un test de signification par pic (w/σ_w via le jacobien) rejette alors tous les pics discrets de s14 : seule la composante diffuse (σ 5–25 mm, ≈ 230 µm) est statistiquement robuste.
 - Borner σ à la résolution ne convient pas : cela fragmente artificiellement une fissuration diffuse.
 
 **Suite envisagée** : autoriser des ajouts à rebours (option `ajout_arriere`, notamment zone X ≈ 10 mm), généraliser à tous les segments et cartographier Σw.
@@ -237,17 +258,19 @@ Variante du script gaussiennes avec le noyau physique d'une fissure, ε(x) = (w�
 ```bash
 python fissuration_cisaillement.py --cube C12 --segment s14 --plot s14_sl.png --csv s14_sl.csv
 ```
-**Version « OBRstudio » (noyau exponentiel-triangulaire à cœur `a`)** : détection par proéminence (`--prom-facteur`, défaut 2×bruit), fond `b(t)` **figé à 0 par défaut** (mesure = retrait + fissures ; `--avec-fond` pour l'ajuster, ce qui absorbe l'erreur du retrait), λ constant par fissure, cœur `a` non décroissant (`--a-max 0` = exponentiel pur), pondération asymétrique (`--w-neg`, défaut 0,3 ; 1 = symétrique), signe `+` par défaut, presets câble (`--preset`), fissures forcées/interdites. Sur C12 s14 (113 j) : 6 fissures, RMSE ≈ 1280 µε, Σw ≈ 320 µm (aires : 298 µm) ; `--a-max 0` : 1390 µε ; chiffres obtenus avec le fond ajusté ; sans fond : 1450 µε ; `--w-neg 1` : 7 fissures, 1030 µε. λ reste mal identifié (souvent à la borne de 1000 m⁻¹).
+**Version « OBRstudio » (noyau exponentiel-triangulaire à cœur `a`)** : détection par proéminence (`--prom-facteur`, défaut 2×bruit), fond `b(t)` **figé à 0 par défaut** (mesure = retrait + fissures ; `--avec-fond` pour l'ajuster, ce qui absorbe l'erreur du retrait), λ constant par fissure, cœur `a` non décroissant (`--a-max 0` = exponentiel pur), pondération asymétrique (`--w-neg`, défaut 0,3 ; 1 = symétrique), signe `+` par défaut, presets câble (`--preset`), fissures forcées/interdites. **[jauge 5 mm]** Sur C12 s14 (113 j) : 6 fissures, RMSE ≈ 1280 µε, Σw ≈ 320 µm (aires : 298 µm) ; `--a-max 0` : 1390 µε ; chiffres obtenus avec le fond ajusté ; sans fond : 1450 µε ; `--w-neg 1` : 7 fissures, 1030 µε. λ reste mal identifié (souvent à la borne de 1000 m⁻¹).
 
-**Détection multi-échéances (`--multi`)** : `find_peaks` sur toutes les échéances (proéminence `--prom-multi`, défaut 1,5×bruit de la date), pics reliés en trajectoires (±3 mm), validées si durée ≥ `--duree-min` (10 j) ou présentes aux deux dernières échéances ; les centres validés initialisent l'ajustement global. Sur s14 : 9 trajectoires validées (X = 8, 22, 31, 43, 52, 62, 81, 84 mm…). `--largeur-max 10` est actif par défaut avec `--multi` (modifiable, `0` = aucune limite) : sans cela, une fissure fantôme en fin de fibre (1/λ ≈ 20–60 mm) absorbe la pente du fond (Σw ≈ 740 µm contre 300 aires). Avec : 8 fissures, RMSE 1237 µε (1016 µε avec `--w-neg 1`), Σw ≈ 340 µm (aires 297).
+**Détection multi-échéances (`--multi`)** : `find_peaks` sur toutes les échéances (proéminence `--prom-multi`, défaut 1,5×bruit de la date), pics reliés en trajectoires (±3 mm), validées si durée ≥ `--duree-min` (10 j) ou présentes aux deux dernières échéances ; les centres validés initialisent l'ajustement global. **[jauge 5 mm]** Sur s14 : 9 trajectoires validées (X = 8, 22, 31, 43, 52, 62, 81, 84 mm…). `--largeur-max 10` est actif par défaut avec `--multi` (modifiable, `0` = aucune limite) : sans cela, une fissure fantôme en fin de fibre (1/λ ≈ 20–60 mm) absorbe la pente du fond (Σw ≈ 740 µm contre 300 aires). Avec : 8 fissures, RMSE 1237 µε (1016 µε avec `--w-neg 1`), Σw ≈ 340 µm (aires 297).
 
-Avec `--multi`, le complément glouton est désactivé (redondant, lent, ajoute des fissures de bord ; `--glouton` pour le réactiver). La jacobienne de l'ajustement global est calculée sur (w, a) directs puis composée avec la somme cumulée : ~5× plus rapide (s14 : ≈ 1 min au lieu de 5). Sur s15 : 9 fissures, RMSE 1134 µε, Σw 595 µm (aires 415) ; une fissure de bord à X=0 mm (w=143 µm, aires 12 µm) est suspecte (effet de bord) : `--interdites 0` pour l'exclure.
+Avec `--multi`, le complément glouton est désactivé (redondant, lent, ajoute des fissures de bord ; `--glouton` pour le réactiver). La jacobienne de l'ajustement global est calculée sur (w, a) directs puis composée avec la somme cumulée : ~5× plus rapide (s14 : ≈ 1 min au lieu de 5). **[jauge 5 mm]** Sur s15 : 9 fissures, RMSE 1134 µε, Σw 595 µm (aires 415) ; une fissure de bord à X=0 mm (w=143 µm, aires 12 µm) est suspecte (effet de bord) : `--interdites 0` pour l'exclure.
 
-`--marge-bord <mm>` (défaut 0 = désactivée ; ne concerne que les fissures, jamais le fit du retrait) exclut les candidats et borne les centres ajustés à cette distance des extrémités de la fibre. Sur s15, la fissure large (1/λ = 10 mm, cœur 12 mm, aires ≈ 0–30 µm) reste collée à la borne (marge 3 ou 8 mm) : ce n'est pas un simple effet de bord mais une bosse large en début de profil que le modèle ne sait pas représenter autrement ; à interpréter avec prudence.
+`--marge-bord <mm>` (défaut 0 = désactivée ; ne concerne que les fissures, jamais le fit du retrait) exclut les candidats et borne les centres ajustés à cette distance des extrémités de la fibre. **[jauge 5 mm]** Sur s15, la fissure large (1/λ = 10 mm, cœur 12 mm, aires ≈ 0–30 µm) reste collée à la borne (marge 3 ou 8 mm) : ce n'est pas un simple effet de bord mais une bosse large en début de profil que le modèle ne sait pas représenter autrement ; à interpréter avec prudence.
 
-Premier essai sur C12 s14 : 3 fissures seulement (X ≈ 51, 61, 67 mm), RMSE ≈ 1400–1600 µε (≈ 900 µε avec les gaussiennes), Σw ≈ 200 → 245 µm. Le noyau exponentiel ne reproduit pas les pics étroits et les plateaux du résidu ; le critère d'ajout s'arrête vite. Résultat à considérer comme exploratoire.
+**Résultat [jauge 2 mm] (C12 s14, `--multi`, échéances de 28 à 113 j parmi les 40 dates retenues).** 11 fissures ; Σw ≈ 195 µm à 37 j, ≈ 250 µm à 52 j, ≈ 299 µm à 113 j (aires : 324 µm) ; RMSE de ≈ 755 µε (41–44 j) à ≈ 1084 µε (113 j). λ : voir « Jauge : ce qu'elle change et ce qui reste robuste ». Durée : ≈ 3 min 30.
 
-**Paires de fissures rapprochées et λ global.** Pour deux fissures voisines (x₁, x₂, d = x₂ − x₁), la superposition linéaire des deux noyaux donne un profil en selle de pics E₁ = β(δ₁ + δ₂e^(−βd)), E₃ = β(δ₁e^(−βd) + δ₂) et de creux E₂ = 2β√(δ₁δ₂)·e^(−βd/2) (δ = COD/2, β = λ). `extraire_paire(E1, E2, E3, d)` inverse ces trois relations : équation scalaire en β (E₂ = 2e^(−βd/2)/(1−e^(−2βd))·√((E₁−E₃e^(−βd))(E₃−E₁e^(−βd)))), puis δ₁ et δ₂ ; vérifié sur des profils synthétiques (β, δ₁, δ₂ retrouvés à 10⁻⁸ près). `estimer_beta` l'applique aux paires de pics consécutifs du résidu lissé (4 mm ≤ d ≤ 60 mm), et le script affiche β médian. L'option `--lambda-global <m⁻¹|auto> [--tol-lambda t]` impose un λ commun à toutes les fissures et dates.
+**[jauge 5 mm]** Premier essai sur C12 s14 : 3 fissures seulement (X ≈ 51, 61, 67 mm), RMSE ≈ 1400–1600 µε (≈ 900 µε avec les gaussiennes), Σw ≈ 200 → 245 µm. Le noyau exponentiel ne reproduit pas les pics étroits et les plateaux du résidu ; le critère d'ajout s'arrête vite. Résultat à considérer comme exploratoire.
+
+**Paires de fissures rapprochées et λ global [essais à la jauge de 5 mm].** Pour deux fissures voisines (x₁, x₂, d = x₂ − x₁), la superposition linéaire des deux noyaux donne un profil en selle de pics E₁ = β(δ₁ + δ₂e^(−βd)), E₃ = β(δ₁e^(−βd) + δ₂) et de creux E₂ = 2β√(δ₁δ₂)·e^(−βd/2) (δ = COD/2, β = λ). `extraire_paire(E1, E2, E3, d)` inverse ces trois relations : équation scalaire en β (E₂ = 2e^(−βd/2)/(1−e^(−2βd))·√((E₁−E₃e^(−βd))(E₃−E₁e^(−βd)))), puis δ₁ et δ₂ ; vérifié sur des profils synthétiques (β, δ₁, δ₂ retrouvés à 10⁻⁸ près). `estimer_beta` l'applique aux paires de pics consécutifs du résidu lissé (4 mm ≤ d ≤ 60 mm), et le script affiche β médian. L'option `--lambda-global <m⁻¹|auto> [--tol-lambda t]` impose un λ commun à toutes les fissures et dates.
 
 Essais (113 j, λ imposé de 100 à 450 m⁻¹) :
 - β par paires : 130 à 380 m⁻¹ selon la paire ; la plupart des paires ont un creux ≤ 0 (fissures séparées, pas d'information sur β). Dispersion d'un facteur ≈ 3 : β n'est pas déterminé précisément.
@@ -255,4 +278,4 @@ Essais (113 j, λ imposé de 100 à 450 m⁻¹) :
 - Σw avec λ imposé varie de ≈ 10 % sur s14 (199 à 231 µm) et s15 (344 à 373 µm), de ≈ 20 % sur C34 s14 (256 à 318 µm) ; sur s4 elle passe de 28 à 53 µm (contre 99 µm avec λ libre et 102 µm avec les gaussiennes).
 - Le nombre de fissures croît avec λ (s14 : 2 à 5). À même λ, le RMSE reste supérieur à celui des gaussiennes (≈ 900 µε sur s14).
 
-Conclusion provisoire : la méthode donne un ordre de grandeur cohérent de Σw sur s14, s15 et C34 s14, mais λ est mal contraint ; un λ global ≈ 300 m⁻¹ (médiane des paires) est un choix raisonnable. Elle ne remplace pas les gaussiennes pour l'ajustement.
+Conclusion provisoire **[jauge 5 mm]** : la méthode donne un ordre de grandeur cohérent de Σw sur s14, s15 et C34 s14, mais λ est mal contraint ; un λ global ≈ 300 m⁻¹ (médiane des paires) est un choix raisonnable. Elle ne remplace pas les gaussiennes pour l'ajustement.
