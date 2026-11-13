@@ -454,7 +454,7 @@ def configurer(preset=None, tol_lambda=0.0, largeur_max=None, plafond_mm=None, m
     """Applique les réglages aux constantes du module (mêmes noms que les options de la ligne de commande).
     Ordre : bornes de λ par défaut, jauge, preset, puis réglages individuels (qui l'emportent sur le preset).
     largeur_max : 1/λ max en mm (None : 10 mm avec multi, sinon aucune ; 0 : aucune)."""
-    global LAM_MIN, LAM_MAX, LAM_INIT
+    global LAM_MIN, LAM_MAX
     g = globals()
     LAM_MIN, LAM_MAX = 3.0 / g["PORTEE_MAX_MM"], 5.0 / g["JAUGE_MM"]
     if kw.get("jauge"):
@@ -467,8 +467,12 @@ def configurer(preset=None, tol_lambda=0.0, largeur_max=None, plafond_mm=None, m
     if plafond_mm is not None:
         g["PLAFOND_UM"] = 1000.0 * plafond_mm
     lmax = largeur_max if largeur_max is not None else (LARGEUR_MULTI if multi else 0.0)
-    if lmax:
-        LAM_MIN = max(LAM_MIN, 1.0 / lmax)
+    if lmax and 1.0 / lmax > LAM_MIN:
+        if 1.0 / lmax < LAM_MAX:
+            LAM_MIN = 1.0 / lmax
+        elif not (preset and PRESETS[preset].get("inv_lambda_mm")):   # λ imposé par le preset : il prime sur largeur_max
+            raise ValueError(f"largeur_max = {lmax:g} mm trop petite : 1/λ ne peut pas descendre sous "
+                             f"{1.0 / LAM_MAX:.2g} mm (jauge / 5) ; 0 = aucune limite")
 
 
 @contextmanager
@@ -719,7 +723,7 @@ def main():
                     help="retrait N k a n [beta alpha_crit]")
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT)
     ap.add_argument("--couplage", action="store_true", help="retrait ajusté avec le couplage F(w) piloté par les données (≈ 30 s)")
-    ap.add_argument("--jauge", type=float, default=None, help="largeur de jauge OBR en mm (défaut 5)")
+    ap.add_argument("--jauge", type=float, default=None, help=f"largeur de jauge OBR en mm (défaut {JAUGE_MM:g})")
     ap.add_argument("--preset", choices=sorted(PRESETS), help="câble / pose : bornes de λ, a, COD ; λ imposé si 1/λ connu")
     ap.add_argument("--signe", choices=["auto", "+", "-"], default="+", help="signe des fissures (défaut + : la physique impose des pics positifs)")
     ap.add_argument("--prom", type=float, default=None, help="proéminence minimale d'un pic en µε (défaut : facteur × bruit)")
@@ -743,10 +747,13 @@ def main():
     ap.add_argument("--plot"); ap.add_argument("--csv")
     a = ap.parse_args()
     warnings.filterwarnings("ignore")
-    configurer(preset=a.preset, tol_lambda=a.tol_lambda, largeur_max=a.largeur_max, plafond_mm=a.plafond, multi=a.multi,
-               jauge=a.jauge, prom_facteur=a.prom_facteur, prom_multi=a.prom_multi, glouton=a.glouton or None,
-               marge_bord=a.marge_bord, a_max=a.a_max, codmin=a.codmin, w_neg=a.w_neg, plancher=a.plancher,
-               fond=True if a.avec_fond else None)
+    try:
+        configurer(preset=a.preset, tol_lambda=a.tol_lambda, largeur_max=a.largeur_max, plafond_mm=a.plafond, multi=a.multi,
+                   jauge=a.jauge, prom_facteur=a.prom_facteur, prom_multi=a.prom_multi, glouton=a.glouton or None,
+                   marge_bord=a.marge_bord, a_max=a.a_max, codmin=a.codmin, w_neg=a.w_neg, plancher=a.plancher,
+                   fond=True if a.avec_fond else None)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
     theta, couplage = a.theta, None
     if a.couplage:
         theta, couplage = F.ajuster_couplage(F.prepare(a.cube), a.de, theta)

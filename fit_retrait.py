@@ -234,7 +234,7 @@ def tracer(theta, De: float, cube: str, segments, fichier: str, couplage=None) -
 
     g = prepare(cube, bin_mm=2)
     N, k, a, n, beta, alpha_crit = theta   # (c, p) en mode couplage
-    txt = (f"Modèle couplé (fit global C12)\nD_e = {De:.1e} m²/s (fixé)\nN = {N:.0f} mol/m³\n"
+    txt = (f"Modèle couplé (paramètres ci-dessous)\nD_e = {De:.1e} m²/s (fixé)\nN = {N:.0f} mol/m³\n"
            f"k = {k:.3f} j⁻¹\na = {a:.0f} µε\nn = {n:.2f}\n"
            + (f"c = {beta:.3g}\np = {alpha_crit:.2f}\nF(w) = c (w / {W_REF:g} µm)^p" if couplage is not None else
               f"β = {beta:.3g}\nα_crit = {alpha_crit:.2f}\nm = {M_DOMMAGE:g} (fixé)"))

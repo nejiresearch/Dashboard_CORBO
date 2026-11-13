@@ -197,7 +197,7 @@ def analyser(h, t0=T0_DEFAUT, verbose=True, arriere=True, fusion=False, ajout_ar
         for g in hist[t][2]:
             lignes.append(dict(t_j=t, id=g["id"], pos_mm=g["c"], A_microdef=g["A"], sigma_mm=g["S"],
                                w_um=ouverture_um(g["A"], g["S"])))
-        if verbose:
+        if verbose and textes[t]:
             print("\n".join(textes[t]))
     return pd.DataFrame(lignes), hist
 
@@ -433,7 +433,7 @@ if __name__ == "__main__":
     elif args.refit:
         theta = F.ajuster(F.prepare(args.cube), args.de)
     noms = F.PARAM_NOMS_FW if couplage is not None else F.PARAM_NOMS
-    print(f"retrait : " + " ".join(f"{nm}={v:.3g}" for nm, v in zip(noms, theta)) + f" (D_e={args.de:.1e})")
+    print("retrait : " + " ".join(f"{nm}={v:.3g}" for nm, v in zip(noms, theta)) + f" (D_e={args.de:.1e})")
     h = donnees_segment(args.cube, args.segment, theta, args.de, couplage=couplage)
     tab, hist = analyser(h, args.t0, arriere=not args.avant, fusion=args.fusion, regul=not args.sans_regul,
                        t_calage=args.t_calage)
