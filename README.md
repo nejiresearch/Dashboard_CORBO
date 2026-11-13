@@ -52,7 +52,7 @@ Dashboard Streamlit d'analyse des déformations mesurées par fibres optiques da
 ## Lancement
 
 ```bash
-pip install streamlit pandas numpy scipy plotly matplotlib
+pip install -r requirements.txt
 streamlit run dashboard.py
 ```
 

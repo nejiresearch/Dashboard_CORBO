@@ -6,7 +6,6 @@ chaque onglet du dashboard. Chaque script :
   - trace la figure avec Plotly, dans un style "publication scientifique"
     (fond blanc, police serif, axes noirs, légendes sobres, export haute résolution).
 """
-import pandas as pd
 import inspect
 import fiber_ops
 import fit_retrait

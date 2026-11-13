@@ -220,13 +220,16 @@ def render_combined_axis_schema(axes_presentes, kind="direct", figsize_per_cube=
 
 
 @st.cache_data(show_spinner=False)
-def make_small_interactive_cube(df_all, highlight_seg, L=CUBE_SIDE_M, height=140):
+def _small_interactive_cube(_df_all, source, highlight_seg, L=CUBE_SIDE_M, height=140):
     """Cube interactif (rotation utilisateur) mais très compact — pour les
-    onglets Profil segment et Surface pos×temps."""
+    onglets Profil segment et Surface pos×temps.
+    `source` identifie le jeu de données (clé du cache ; _df_all n'est pas haché)."""
     fig = go.Figure()
     fig.add_trace(cube_wireframe_trace(L))
-    autres = df_all[df_all["segment"] != highlight_seg]
-    sel = df_all[df_all["segment"] == highlight_seg]
+    # la géométrie ne dépend pas de la date : un seul point par position de fibre (sinon ~300 000 points, figure de 12 Mo)
+    geom = _df_all.drop_duplicates(["segment", "x_fibre_m"]).sort_values(["segment", "x_fibre_m"])
+    autres = geom[geom["segment"] != highlight_seg]
+    sel = geom[geom["segment"] == highlight_seg]
     vx, vy, vz = view_xyz(autres["X_m"], autres["Y_m"], autres["Z_m"])
     fig.add_trace(go.Scatter3d(x=vx, y=vy, z=vz,
                                 mode="markers", marker=dict(size=1.5, color="lightgray", opacity=0.4),
@@ -244,8 +247,9 @@ def make_small_interactive_cube(df_all, highlight_seg, L=CUBE_SIDE_M, height=140
     return fig
 
 @st.cache_data(show_spinner=False)
-def make_multi_cube(_df_all, segs_a, segs_b, L=CUBE_SIDE_M, height=170):
-    """Petit cube interactif : fibres du groupe A en rouge, groupe B en bleu."""
+def _multi_cube(_df_all, source, segs_a, segs_b, L=CUBE_SIDE_M, height=170):
+    """Petit cube interactif : fibres du groupe A en rouge, groupe B en bleu.
+    `source` identifie le jeu de données (clé du cache ; _df_all n'est pas haché)."""
     fig = go.Figure()
     fig.add_trace(cube_wireframe_trace(L))
     choisies = set(segs_a) | set(segs_b)
@@ -307,6 +311,17 @@ uploaded = st.sidebar.file_uploader("Charger un autre fichier (optionnel)", type
 
 # 4. Logique de priorité : l'upload prime sur le bouton radio
 source = uploaded if uploaded is not None else cube_paths[selection]
+# identifiant du jeu de données affiché : clé des caches de figures et des résultats mémorisés
+source_id = f"upload:{uploaded.file_id}" if uploaded is not None else cube_paths[selection]
+
+
+def make_small_interactive_cube(df_all, highlight_seg, **kw):
+    return _small_interactive_cube(df_all, source_id, highlight_seg, **kw)
+
+
+def make_multi_cube(df_all, segs_a, segs_b, **kw):
+    return _multi_cube(df_all, source_id, segs_a, segs_b, **kw)
+
 
 # spinner
 
@@ -326,7 +341,6 @@ date_label = lambda d: f"{pd.Timestamp(d):%d/%m/%Y %Hh%M} (J+{df_full.loc[df_ful
 
 t_full_min = float(np.floor(df_full["temps_ecoule_j"].min()))
 t_full_max = float(np.ceil(df_full["temps_ecoule_j"].max()))
-delta_defaults = {"linear": ("jours", 0.0, 0.5), "diffusif": ("√jours", 0.0, 0.1), "log": ("ln(1+j)", 0.0, 0.05)}
 axes_dispo = sorted(df_full["axe_mesure"].unique())
 profondeurs_dispo = sorted(df_full["plan_profondeur_mm"].dropna().unique())
 segments_dispo = sorted(df_full["segment"].unique(), key=lambda s: int(s[1:]))
@@ -410,9 +424,9 @@ col_logo, col_title = st.columns([1, 6])
 with col_logo:
     st.image("Logo1.png", width=300)
 with col_title:
-    st.title("Dashboard cube B40-SF— Retrait de carbonatation, cube B40-SF")
+    st.title("Dashboard cube B40-SF — Retrait de carbonatation")
 st.caption(
-    "Analyse du retrait de carbonatation d'un bloc de pâte de ciment"
+    "Analyse du retrait de carbonatation d'un bloc de pâte de ciment. "
     "Fibres optiques 3D — chaque fibre ne mesure la déformation que dans son propre axe "
     "(εxx, εyy ou εzz). Le cube est attaqué sur ses 6 faces."
 )
@@ -675,7 +689,7 @@ if onglet_actif == 5:
     st.markdown("""
 **Post-traitement :** nuage 3D de tous les points mesurés, coloré par la valeur de
 déformation, avec un curseur temporel (une frame par date) et une géométrie statique de
-référence (4 armatures orientées selon l'axe X). L'échelle de couleur peut être
+référence (4 armatures orientées selon l'axe Y). L'échelle de couleur peut être
 **automatique par date** (recommandé) ou **fixe/manuelle** via la barre latérale.
 
 **Lecture physique :** garder en tête que la couleur ne représente pas une grandeur
@@ -908,9 +922,11 @@ Les calculs ne se lancent qu'au clic sur **Calculer**.
                     df_op, segs_a, segs_b, agg_key, comb_key, absval, L=CUBE_SIDE_M)
             st.session_state["op_state"] = dict(
                 res=res_op, prof=prof_op, segs_a=tuple(segs_a), segs_b=tuple(segs_b),
-                agg=agg_key, combine=comb_key, absval=absval, dates=list(sel_dates))
+                agg=agg_key, combine=comb_key, absval=absval, dates=list(sel_dates), source=source_id)
 
     S = st.session_state.get("op_state")
+    if S is not None and S.get("source") != source_id:   # résultat calculé sur un autre cube / fichier
+        S = None
     if S is None:
         st.info("Choisis des fibres puis clique sur **Calculer**.")
     else:
@@ -977,6 +993,13 @@ Les calculs ne se lancent qu'au clic sur **Calculer**.
                                             S["absval"], dates_filter=S["dates"]), language="python")
 
 
+# ------------------------------------------------------------ 11. fissuration
+if onglet_actif == 10:
+    import onglet_fissuration
+    onglet_fissuration.render({"Cube 12": "C12", "Cube 34": "C34"}[selection], uploaded is not None,
+                              df_full, make_multi_cube, COMPOSANTE_LABEL)
+
+
 st.markdown("---")
 with st.expander("ℹ️ Notes méthodologiques"):
     st.markdown(f"""
@@ -987,15 +1010,9 @@ with st.expander("ℹ️ Notes méthodologiques"):
     - `dist_face_laterale_min` = distance min aux faces non-perpendiculaires (effet indirect / restreinte possible).
     - L'échelle de couleur des cartographies est configurable dans la barre latérale (colormap, automatique ou bornes manuelles).
     - Les schémas combinés des onglets 1 et 2 sont des images statiques (indicatives). Ceux des onglets 4 et 9 sont interactifs (rotation possible) mais restent volontairement très compacts.
-    - Les 4 armatures affichées dans la cartographie 3D sont orientées selon l'axe X (positions Y/Z à ajuster si besoin).
+    - Les 4 armatures affichées dans la cartographie 3D sont orientées selon l'axe Y (positions X/Z à ajuster si besoin).
     - Chaque onglet propose un bouton "📜 Générer le script Python (notebook)" : il télécharge un script autonome (repart du CSV brut, refait les calculs, style Plotly publication scientifique) reproduisant la figure affichée.
     - Aucun filtrage des valeurs aberrantes n'est appliqué (choix utilisateur).
     """)
-
-# ------------------------------------------------------------ 11. fissuration
-if onglet_actif == 10:
-    import onglet_fissuration
-    onglet_fissuration.render({"Cube 12": "C12", "Cube 34": "C34"}[selection], uploaded is not None,
-                              df_full, make_multi_cube, COMPOSANTE_LABEL)
 
 _chargement.empty()

@@ -132,7 +132,7 @@ def load_and_prepare(csv_path: str | Path) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    df = load_and_prepare("/mnt/user-data/uploads/profils_3d_C12.csv")
+    df = load_and_prepare("data/profils_3d_C12.csv")
     print(df.shape)
     print(df[["segment", "axe_mesure", "composante", "plan_profondeur_mm",
               "fibre", "date_mesure", "temps_ecoule_j",

@@ -15,6 +15,7 @@ import fit_retrait as F
 N_GRILLE = 24      # points par axe (24³ ≈ 14 000 points par image : reste fluide dans le navigateur)
 N_DATES = 12       # nombre d'images de l'animation
 NIVEAUX = 4        # nombre d'isosurfaces
+TOL_DATE_J = 0.5   # jours : écart maximal entre la date de l'image et la mesure superposée
 
 
 def champ_retrait(theta, de: float, dates, n: int = N_GRILLE, couplage=None):
@@ -40,12 +41,12 @@ def _fibres(g: pd.DataFrame, segments, t: float, vmin: float):
     if g is None or not len(segments):
         return traces
     d = g[g["segment"].isin(segments)]
-    if d.empty:
-        return traces
-    ts = d["temps_ecoule_j"].unique()
-    d = d[d["temps_ecoule_j"] == ts[np.argmin(np.abs(ts - t))]]
+    # une trace par segment à CHAQUE image (vide si le segment n'a pas de mesure à cette date) : le nombre de traces
+    # doit rester constant d'une image à l'autre, sinon les fibres absentes de la 1re image ne sont jamais affichées
     for s, q in d.groupby("segment"):
-        q = q.sort_values("xb")
+        ts = q["temps_ecoule_j"].unique()
+        tp = ts[np.argmin(np.abs(ts - t))]
+        q = q[q["temps_ecoule_j"] == tp].sort_values("xb") if abs(tp - t) <= TOL_DATE_J else q.iloc[:0]
         traces.append(go.Scatter3d(x=q["X"] * 1000, y=q["Y"] * 1000, z=q["Z"] * 1000, mode="markers", name=f"mesure {s}",
                                    marker=dict(size=3, color=q["eps"], colorscale="Turbo", cmin=vmin, cmax=0.0, showscale=False),
                                    hovertemplate=f"{s}<br>%{{marker.color:.0f}} µε<extra></extra>"))

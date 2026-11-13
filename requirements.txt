@@ -1,0 +1,8 @@
+# Testé avec streamlit 1.67, pandas 3.0, numpy 2.5, scipy 1.18, plotly 7.1 (Python 3.13).
+# Un Streamlit récent est nécessaire (width="stretch").
+streamlit
+pandas
+numpy
+scipy
+plotly
+matplotlib
