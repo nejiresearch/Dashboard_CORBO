@@ -216,6 +216,10 @@ Paramètres (constantes en tête de script) : `S_MIN`, `S_MAX` (25 mm), `ADD_GAI
 
 Case « Afficher le retrait modélisé en 3D » (`retrait_3d.figure_retrait_3d`) : champ ε(t, x, y, z) évalué avec `alpha_1d` + `alpha_3d` (inchangés, β et α_crit inclus) sur une grille de 24 points par axe, 4 isosurfaces (10 % à 90 % du retrait maximal), 12 dates au plus, curseur de temps (sans bouton Play). Seules les valeurs sont renvoyées d'une image à l'autre (grille commune), ce qui donne ≈ 2,5 Mo. Les fibres des segments choisis sont superposées (points colorés par la mesure à la date la plus proche, même échelle). C'est le retrait de la matrice modélisé, sans fissures : l'écart avec la mesure en est un indicateur. Aucun couplage retrait → fissure → diffusion n'est implémenté.
 
+### Fissures en 3D dans l'onglet 11
+
+Case « Afficher les fissures en 3D » (`retrait_3d.figure_fissures_3d`), disponible après un calcul « Retrait + fissuration » (gaussiennes ou shear lag) : un point par fissure détectée, placé à sa position sur la fibre, taille et couleur selon l'ouverture w (µm), symbole selon l'orientation de la fibre (● X, ■ Y, ◆ Z), curseur de temps (30 dates au plus, dernière date affichée au départ). Rien n'est interpolé entre les fibres, et une fibre ne voit que les fissures qui la traversent ; pour couvrir le cube, cocher tous les segments (cases « Tous »). Les ouvertures inférieures à 0,5 µm (`W_MIN_AFFICHE`) ne sont pas tracées. La figure est aussi produite par les scripts exportés.
+
 ### Performance du dashboard
 
 - Les filtres de la barre latérale sont dans un formulaire : rien n'est recalculé avant **✅ Appliquer les filtres**.
