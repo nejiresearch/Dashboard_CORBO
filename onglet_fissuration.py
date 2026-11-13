@@ -429,6 +429,17 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     st.markdown("**Synthèse**")
     st.dataframe(pd.DataFrame(synth), hide_index=True)
 
+    if st.checkbox("Afficher les fissures en 3D (position sur les fibres, taille et couleur selon l'ouverture)", key="fiss_cube3d",
+                   help="Un point par fissure détectée, à sa position sur la fibre ; curseur de temps. Rien n'est interpolé "
+                        "entre les fibres : cochez plus de segments (cases « Tous ») pour couvrir le cube."):
+        fig3 = R3.figure_fissures_3d({s: tab for s, (tab, _) in resultats.items()}, _donnees(cube), cube)
+        if fig3 is None:
+            st.info("Aucune fissure à afficher.")
+        else:
+            st.plotly_chart(fig3, width="stretch", key="fiss_cube3d_fig")
+            st.caption("● fibres selon X · ■ selon Y · ◆ selon Z. Une fibre ne voit que les fissures qui la traversent ; "
+                       f"les ouvertures inférieures à {R3.W_MIN_AFFICHE:g} µm ne sont pas tracées.")
+
     for s, (tab, hist) in resultats.items():
         with st.expander(f"Segment {s}", expanded=len(resultats) == 1):
             ts = sorted(hist)

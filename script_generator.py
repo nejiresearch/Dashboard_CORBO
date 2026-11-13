@@ -708,6 +708,11 @@ for seg, (tab, hist) in resultats.items():
                             title=f"{{CUBE}} {{seg}} — suivi des gaussiennes").show()
     G.figure_surface(tab, CUBE, seg).show()           # figure 3D : temps x position x ouverture w (µm) de chaque fissure
 
+# Fissures détectées placées sur les fibres dans le cube (taille et couleur : ouverture w), curseur de temps
+fig_fiss = R3.figure_fissures_3d({{seg: tab for seg, (tab, _) in resultats.items()}}, g_prep, CUBE)
+if fig_fiss is not None:
+    fig_fiss.show()
+
 # Retrait modélisé en 3D (isosurfaces, curseur de temps) avec les fibres choisies superposées
 R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS, couplage=COUPLAGE).show()
 """
@@ -809,6 +814,11 @@ for seg, (tab, hist) in resultats.items():
     apply_publication_style(S.figure_suivi(tab, CUBE, seg), xlabel="Position (mm)", ylabel="Temps écoulé (j)",
                             title=f"{{CUBE}} {{seg}} — suivi des fissures").show()
     S.figure_surface(tab, CUBE, seg).show()           # figure 3D : temps x position x ouverture w (µm) de chaque fissure
+
+# Fissures détectées placées sur les fibres dans le cube (taille et couleur : ouverture w), curseur de temps
+fig_fiss = R3.figure_fissures_3d({{seg: tab for seg, (tab, _) in resultats.items()}}, g_prep, CUBE)
+if fig_fiss is not None:
+    fig_fiss.show()
 
 # Retrait modélisé en 3D (isosurfaces, curseur de temps) avec les fibres choisies superposées
 R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS, couplage=COUPLAGE).show()
