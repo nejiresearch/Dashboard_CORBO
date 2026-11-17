@@ -102,16 +102,22 @@ def _donnees(cube):
     return F.prepare(cube, bin_mm=1)    # même pas que donnees_segment (CLI)
 
 
-@st.cache_data(show_spinner="Ajustement du retrait sur le cube (~10 s)…")
-def _theta(cube, de, refit, manuel):
-    return tuple(F.ajuster(F.prepare(cube), de)) if refit else tuple(manuel)
+@st.cache_data(show_spinner="Ajustement du retrait sur le cube (10 s à 1 min)…")
+def _theta(cube, de, refit, manuel, libres=F.LIBRES_DEFAUT):
+    """Retourne (theta, D_e). Sans ré-ajustement : valeurs imposées. Sinon seuls les paramètres `libres` sont ajustés."""
+    if not refit:
+        return tuple(manuel), float(de)
+    th, de_fit = F.ajuster_partiel(F.prepare(cube), list(manuel), de, libres)
+    return tuple(float(v) for v in th), float(de_fit)
 
 
-@st.cache_data(show_spinner="Couplage F(w) : estimation de w(t) et ajustement du retrait (~30 s)…")
-def _theta_fw(cube, de, refit, manuel):
-    """Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w)) en tuples (hachables pour les caches)."""
-    th, (ts, w) = F.ajuster_couplage(F.prepare(cube), de, None if refit else np.array(manuel))
-    return tuple(float(v) for v in th), (tuple(float(t) for t in ts), tuple(float(v) for v in w))
+@st.cache_data(show_spinner="Couplage F(w) : estimation de w(t) et ajustement du retrait (~30 s à 2 min)…")
+def _theta_fw(cube, de, refit, manuel, libres=F.LIBRES_DEFAUT, cp=(0.01, 1.0)):
+    """Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w), D_e) en tuples (hachables pour les caches).
+    Les paramètres non libres restent à (N, k, a, n) de `manuel`, (c, p) de `cp` et D_e de `de`."""
+    th, (ts, w), de_fit = F.ajuster_couplage_partiel(F.prepare(cube), de, None if refit else np.array(manuel),
+                                                     libres=libres, theta_fixe=list(manuel)[:4] + list(cp))
+    return (tuple(float(v) for v in th), (tuple(float(t) for t in ts), tuple(float(v) for v in w)), float(de_fit))
 
 
 @_memoise
@@ -303,10 +309,22 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
         regul = c3.checkbox("Régularisation temporelle (wᵢ(t) croissant, σᵢ lisse)", value=True, disabled=seul or exp,
                             help="Gaussiennes seulement. La méthode exponentielle ajuste toujours globalement (w, a croissants, λ constant).")
         refit = c4.checkbox("Ré-ajuster le retrait sur ce cube", value=False,
-                            help="Sinon : paramètres du fit C12 (validés sur C34).")
-        de = c5.number_input("D_e (m²/s)", value=float(F.DE_DEFAUT), format="%.2e")
+                            help="Sinon : paramètres imposés (fit C12 par défaut, voir « Paramètres avancés »). Coché : seuls les "
+                                 "paramètres cochés ci-dessous sont ajustés.")
+        de = c5.number_input("D_e (m²/s)", value=float(F.DE_DEFAUT), format="%.2e",
+                             help="Valeur imposée, ou point de départ si D_e est libre.")
+        st.markdown("**Paramètres libres du retrait** (cochés : ajustés ; décochés : fixés aux valeurs imposées) — "
+                    + ("toujours appliqué en couplage F(w), où le retrait est toujours ajusté" if fw
+                       else "appliqué seulement si « Ré-ajuster le retrait » est coché"))
+        noms_libres = ["N", "k", "a", "n"] + (["c", "p"] if fw else ["β", "α_crit"]) + ["D_e"]
+        libres = tuple(col.checkbox(nom, value=(nom != "D_e"), key=f"fiss_libre_{'fw' if fw else 'dommage'}_{nom}",
+                                    help=("N et D_e n'interviennent que par leur rapport N/D_e : ne libérez pas les deux."
+                                          if nom in ("N", "D_e") else None))
+                       for col, nom in zip(st.columns(7), noms_libres))
         with st.expander("⚙️ Paramètres avancés (retrait et fissuration)"):
-            st.markdown("**Retrait** (ignoré si « Ré-ajuster » est coché)")
+            st.markdown("**Retrait** : valeurs imposées (sans ré-ajustement, ou pour les paramètres décochés ci-dessus)"
+                        + (" ; N, k, a, n, β, α_crit servent aussi à estimer w(t) au départ du couplage F(w) si « Ré-ajuster » "
+                           "n'est pas coché" if fw else ""))
             r1, r2, r3, r4, r5, r6 = st.columns(6)
             th = [r1.number_input("N", value=float(G.THETA_DEFAUT[0]), step=100.0, format="%.0f"),
                   r2.number_input("k (1/j)", value=float(G.THETA_DEFAUT[1]), step=0.001, format="%.4f"),
@@ -316,6 +334,13 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
                                   help="D_eff = D_e·(1 + β·max(0, α − α_crit)^m), m = 2. 0 : diffusion constante."),
                   r6.number_input("α_crit", value=float(G.THETA_DEFAUT[5]), min_value=0.01, max_value=0.99, step=0.05,
                                   format="%.2f", help="Degré de carbonatation au-delà duquel la fissuration accélère la diffusion.")]
+            cp = (0.01, 1.0)
+            if fw:
+                q1, q2, _ = st.columns([1, 1, 4])
+                cp = (q1.number_input("c (couplage F(w))", value=0.01, min_value=0.0, step=0.01, format="%.3g",
+                                      help="D_eff = D_e·(1 + c·(w/100 µm)^p). Utilisé seulement si c n'est pas libre."),
+                      q2.number_input("p (couplage F(w))", value=1.0, min_value=0.3, max_value=4.0, step=0.1, format="%.2f",
+                                      help="Exposant de F(w). Utilisé seulement si p n'est pas libre."))
             vals, vexp = {}, {}
             if not seul and exp:
                 st.markdown("**Fissuration : exponentielle (shear lag)**")
@@ -342,11 +367,13 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     if lancer:
         if not segs or n_ech < (1 if seul else 2):
             st.error("Choisissez au moins un segment et " + ("une échéance." if seul else "deux échéances."))
+        elif (refit or fw) and libres[0] and libres[6]:
+            st.error("N et D_e ne sont identifiables que par leur rapport N/D_e : libérez l'un ou l'autre, pas les deux.")
         else:
             t_cal = min(t_sel, key=lambda t: abs(t - t_cal_sel))
             st.session_state["fissuration_jobs"] = dict(
                 t_calage=float(t_cal), cube=cube, segs=segs, dates=tuple(sorted(t_sel)), regul=regul, refit=refit, de=de, seul=seul,
-                methode=methode, exp_params=vexp, theta=tuple(th), fw=fw,
+                methode=methode, exp_params=vexp, theta=tuple(th), fw=fw, libres=libres, cp=tuple(cp),
                 groupe=vexp.get("groupe", vals.get("GROUPE_MM", GROUPE_DEFAUT)),
                 params=tuple((k, vals[k]) for k, *_ in PARAMS_FISSURATION if k in vals))
     job = st.session_state.get("fissuration_jobs")
@@ -356,17 +383,26 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     exp = job["methode"] == METHODES[1]
 
     couplage = None
-    if fw:
-        theta, couplage = _theta_fw(cube, job["de"], job["refit"], job["theta"])
-    else:
-        theta = _theta(cube, job["de"], job["refit"], job["theta"])
+    libres = job.get("libres", F.LIBRES_DEFAUT)
+    try:
+        if fw:
+            theta, couplage, de_fit = _theta_fw(cube, job["de"], job["refit"], job["theta"], libres, job.get("cp", (0.01, 1.0)))
+        else:
+            theta, de_fit = _theta(cube, job["de"], job["refit"], job["theta"], libres)
+    except ValueError as e:
+        st.error(str(e))
+        return
+    job = dict(job, de=de_fit)          # D_e éventuellement ajusté : utilisé pour toute la suite (copie locale)
+    ajuste = libres if (fw or job["refit"]) else (False,) * 7
     st.markdown("**Paramètres du retrait θ** ("
-                + ("couplage F(w) : ajustés sur ce cube" if fw else "ajustés sur ce cube" if job["refit"] else "imposés, non ajustés") + ")"
+                + (f"ajustés sur ce cube : {', '.join(n for n, a in zip(('N', 'k', 'a', 'n') + (('c', 'p') if fw else ('β', 'α_crit')) + ('D_e',), ajuste) if a)} ; autres imposés"
+                   if any(ajuste) else "imposés, non ajustés") + (", couplage F(w)" if fw else "") + ")"
                 + ("" if seul else (" · exponentielle (shear lag)" if exp else f" · gaussiennes calées à {job['t_calage']:.1f} j")))
-    formats = ("{:.0f}", "{:.4f}", "{:.0f}", "{:.2f}", "{:.3g}", "{:.2f}")
-    unites = ("mol/m³", "1/j", "µε", "", "", "")
-    for col, nom, v, f, u in zip(st.columns(6), F.PARAM_NOMS_FW if fw else F.PARAM_NOMS, theta, formats, unites):
-        col.metric(nom, f.format(v) + (f" {u}" if u else ""))
+    formats = ("{:.0f}", "{:.4f}", "{:.0f}", "{:.2f}", "{:.3g}", "{:.2f}", "{:.2e}")
+    unites = ("mol/m³", "1/j", "µε", "", "", "", "m²/s")
+    noms = tuple(F.PARAM_NOMS_FW if fw else F.PARAM_NOMS) + ("D_e",)
+    for col, nom, v, f, u, a in zip(st.columns(7), noms, tuple(theta) + (de_fit,), formats, unites, ajuste):
+        col.metric(f"{nom} ({'ajusté' if a else 'imposé'})", f.format(v) + (f" {u}" if u else ""))
     if fw:
         _courbe_w(couplage, theta)
     _, col_cube, _ = st.columns([1, 1, 1])

@@ -175,35 +175,99 @@ def ouverture_donnees(g: pd.DataFrame, theta, De: float = DE_DEFAUT, couplage=No
             np.concatenate([[0.0], np.maximum.accumulate(w.values)]))
 
 
-def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE, couplage=None) -> np.ndarray:
-    """Ajustement de l'enveloppe basse (perte asymétrique), multi-départs sur (N, k).
-    Avec couplage = (dates, w) : les deux derniers paramètres sont (c, p) au lieu de (beta, alpha_crit)."""
+LIBRES_DEFAUT = (True, True, True, True, True, True, False)   # N, k, a, n, (beta, alpha_crit) ou (c, p), D_e
+BORNES_DE = (np.log(1e-8), np.log(1e-5))   # m2/s, D_e optimisé en espace logarithmique
+
+
+def ajuster_partiel(g: pd.DataFrame, theta_fixe=None, De: float = DE_DEFAUT, libres=LIBRES_DEFAUT, w: float = W_FISSURE,
+                    couplage=None):
+    """Ajustement de l'enveloppe basse (perte asymétrique) sur une partie des paramètres seulement.
+
+    libres : 7 booléens (N, k, a, n, beta, alpha_crit, D_e) ; en mode couplage, (beta, alpha_crit) -> (c, p).
+    Les paramètres non libres restent aux valeurs de theta_fixe (6 valeurs ; 4 acceptées : beta = 0, alpha_crit = 0,3)
+    et D_e à De. Départs multiples sur (N, k) s'ils sont libres. Retourne (theta, De).
+    N et D_e n'interviennent que par leur rapport : les libérer ensemble lève ValueError."""
+    libres = tuple(bool(v) for v in libres)
+    if len(libres) != 7:
+        raise ValueError("libres : 7 valeurs attendues (N, k, a, n, beta|c, alpha_crit|p, D_e)")
+    if libres[0] and libres[6]:
+        raise ValueError("N et D_e ne sont identifiables que par leur rapport N/D_e : libérez l'un ou l'autre, pas les deux")
+    fw = couplage is not None
+    if theta_fixe is None:
+        if not all(libres[:6]):
+            raise ValueError("theta_fixe est nécessaire quand un paramètre de theta est fixé")
+        theta_fixe = [5000.0, 0.05, 6000.0, 1.0, 1.0, 1.0 if fw else 0.3]
+    theta_fixe = (list(theta_fixe) + [0.0, 0.3][len(theta_fixe) - 4:])[:6]
+    nat = np.array([float(v) for v in theta_fixe] + [float(De)])          # valeurs naturelles (fixées ou départ)
+    if not any(libres):
+        return np.array(nat[:6]), float(nat[6])
+    en_log = [True, True, False, False, True, not fw, True]                # N, k, beta|c, alpha_crit (dommage), D_e
+    bornes = BORNES_FW if fw else BORNES
+    lo_tout = np.array(list(bornes[0]) + [BORNES_DE[0]]); hi_tout = np.array(list(bornes[1]) + [BORNES_DE[1]])
+    idx = np.where(libres)[0]
+    lo, hi = lo_tout[idx], hi_tout[idx]
     eps = g["eps"].values
     etat = {"n": 0, "t0": time.time(), "depart": 0}
-    fw = couplage is not None
-    bornes, fin0 = (BORNES_FW, [np.log(1.0), 1.0]) if fw else (BORNES, [np.log(1.0), np.log(0.3)])
 
-    def vers_theta(q):
-        return [np.exp(q[0]), np.exp(q[1]), q[2], q[3], np.exp(q[4]), q[5] if fw else np.exp(q[5])]
+    def complet(q):
+        v = nat.copy()
+        for j, i in enumerate(idx):
+            v[i] = np.exp(q[j]) if en_log[i] else q[j]
+        return v
+
+    departs = list(dict.fromkeys((N0 if libres[0] else None, k0 if libres[1] else None) for N0, k0 in DEPARTS))
 
     def residus(q):
         etat["n"] += 1
-        ecoule = time.time() - etat["t0"]
-        sys.stderr.write(f"\r  départ {etat['depart']}/{len(DEPARTS)} | évaluations : "
-                         f"{etat['n']} | écoulé : {ecoule:.0f} s")
+        sys.stderr.write(f"\r  départ {etat['depart']}/{len(departs)} | évaluations : "
+                         f"{etat['n']} | écoulé : {time.time() - etat['t0']:.0f} s")
         sys.stderr.flush()
-        r = modele(vers_theta(q), g, De, couplage) - eps
+        v = complet(q)
+        r = modele(v[:6], g, v[6], couplage) - eps
         return np.where(r < 0, np.sqrt(w) * r, r)   # r < 0 : mesure au-dessus du modèle
 
+    # départs des paramètres libres : (N0, k0) de DEPARTS, a = 6000, n = 1, beta|c = 1, alpha_crit = 0,3 | p = 1, D_e = De
+    depart_nat = nat.copy(); depart_nat[2:6] = [6000.0, 1.0, 1.0, 1.0 if fw else 0.3]
     meilleur = None
-    for i, (N0, k0) in enumerate(DEPARTS, 1):
-        etat["depart"] = i
-        r = least_squares(residus, [np.log(N0), np.log(k0), 6000.0, 1.0] + fin0,
-                          bounds=bornes, x_scale=[1, 1, 1000, 1, 1, 1], diff_step=1e-3)
+    for k_dep, (N0, k0) in enumerate(departs, 1):
+        etat["depart"] = k_dep
+        v0 = depart_nat.copy()
+        if N0 is not None:
+            v0[0] = N0
+        if k0 is not None:
+            v0[1] = k0
+        q0 = np.array([np.log(v0[i]) if en_log[i] else v0[i] for i in idx])
+        q0 = np.clip(q0, lo, hi)
+        r = least_squares(residus, q0, bounds=(lo, hi), x_scale=np.array([1, 1, 1000, 1, 1, 1, 1.0])[idx], diff_step=1e-3)
         if meilleur is None or r.cost < meilleur.cost:
             meilleur = r
     sys.stderr.write("\n")
-    return np.array(vers_theta(meilleur.x))
+    v = complet(meilleur.x)
+    return v[:6], float(v[6])
+
+
+def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE, couplage=None) -> np.ndarray:
+    """Ajustement de l'enveloppe basse (perte asymétrique), multi-départs sur (N, k), les 6 paramètres libres et D_e fixé.
+    Avec couplage = (dates, w) : les deux derniers paramètres sont (c, p) au lieu de (beta, alpha_crit)."""
+    return ajuster_partiel(g, None, De, LIBRES_DEFAUT, w, couplage)[0]
+
+
+def ajuster_couplage_partiel(g: pd.DataFrame, De: float = DE_DEFAUT, theta_ref=None, iterations: int = 2,
+                             w: float = W_FISSURE, libres=LIBRES_DEFAUT, theta_fixe=None):
+    """Couplage F(w) avec une partie des paramètres fixée (voir ajuster_partiel ; libres porte sur (N, k, a, n, c, p, D_e)).
+    theta_ref (dommage en alpha) initialise w ; s'il est absent, un ajustement standard est fait d'abord, avec les mêmes
+    N, k, a, n, D_e libres et beta, alpha_crit libres. Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w), De)."""
+    libres = tuple(libres)
+    if theta_ref is None:
+        fixe_std = None if theta_fixe is None else list(theta_fixe)[:4] + [0.0, 0.3]
+        ref, De = ajuster_partiel(g, fixe_std, De, libres[:4] + (True, True, libres[6]), w)
+    else:
+        ref = np.asarray(theta_ref, float)
+    couplage, theta = None, ref
+    for _ in range(max(iterations, 1)):
+        couplage = ouverture_donnees(g, theta, De, couplage)
+        theta, De = ajuster_partiel(g, theta_fixe, De, libres, w, couplage)
+    return theta, couplage, De
 
 
 def ajuster_couplage(g: pd.DataFrame, De: float = DE_DEFAUT, theta_ref=None, iterations: int = 2,
@@ -212,11 +276,7 @@ def ajuster_couplage(g: pd.DataFrame, De: float = DE_DEFAUT, theta_ref=None, ite
     de (N, k, a, n, c, p), puis w(t) recalculé avec ce nouveau retrait. theta_ref (6 valeurs, dommage en alpha)
     initialise w ; s'il est absent, un ajustement standard est fait d'abord.
     Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w en µm))."""
-    ref = np.asarray(ajuster(g, De, w) if theta_ref is None else theta_ref, float)
-    couplage, theta = None, ref
-    for _ in range(max(iterations, 1)):
-        couplage = ouverture_donnees(g, theta, De, couplage)
-        theta = ajuster(g, De, w, couplage)
+    theta, couplage, _ = ajuster_couplage_partiel(g, De, theta_ref, iterations, w)
     return theta, couplage
 
 
