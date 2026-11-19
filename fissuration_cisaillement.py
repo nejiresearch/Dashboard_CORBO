@@ -722,6 +722,8 @@ def main():
                     help="retrait N k a n [beta alpha_crit]")
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT)
     ap.add_argument("--couplage", action="store_true", help="retrait ajusté avec le couplage F(w) piloté par les données (≈ 30 s)")
+    ap.add_argument("--tmax", type=float, default=None, metavar="JOURS",
+                    help="durée simulée du retrait (défaut : automatique, dernière date des données)")
     ap.add_argument("--jauge", type=float, default=None, help=f"largeur de jauge OBR en mm (défaut {JAUGE_MM:g})")
     ap.add_argument("--preset", choices=sorted(PRESETS), help="câble / pose : bornes de λ, a, COD ; λ imposé si 1/λ connu")
     ap.add_argument("--signe", choices=["auto", "+", "-"], default="+", help="signe des fissures (défaut + : la physique impose des pics positifs)")
@@ -753,6 +755,7 @@ def main():
                    fond=True if a.avec_fond else None)
     except ValueError as e:
         raise SystemExit(str(e)) from None
+    F.TMAX = a.tmax
     theta, couplage = a.theta, None
     if a.couplage:
         theta, couplage = F.ajuster_couplage(F.prepare(a.cube), a.de, theta)
