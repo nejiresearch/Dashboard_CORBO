@@ -103,26 +103,27 @@ def _donnees(cube):
 
 
 @st.cache_data(show_spinner="Ajustement du retrait sur le cube (10 s à 1 min)…")
-def _theta(cube, de, refit, manuel, libres=F.LIBRES_DEFAUT):
-    """Retourne (theta, D_e). Sans ré-ajustement : valeurs imposées. Sinon seuls les paramètres `libres` sont ajustés."""
+def _theta(cube, de, refit, manuel, libres=F.LIBRES_DEFAUT, tmax=0.0):
+    """Retourne (theta, D_e). Sans ré-ajustement : valeurs imposées. Sinon seuls les paramètres `libres` sont ajustés.
+    tmax : durée simulée du retrait (j ; 0 = automatique)."""
     if not refit:
         return tuple(manuel), float(de)
-    th, de_fit = F.ajuster_partiel(F.prepare(cube), list(manuel), de, libres)
+    th, de_fit = F.ajuster_partiel(F.prepare(cube), list(manuel), de, libres, tmax=tmax)
     return tuple(float(v) for v in th), float(de_fit)
 
 
 @st.cache_data(show_spinner="Couplage F(w) : estimation de w(t) et ajustement du retrait (~30 s à 2 min)…")
-def _theta_fw(cube, de, refit, manuel, libres=F.LIBRES_DEFAUT, cp=(0.01, 1.0)):
+def _theta_fw(cube, de, refit, manuel, libres=F.LIBRES_DEFAUT, cp=(0.01, 1.0), tmax=0.0):
     """Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w), D_e) en tuples (hachables pour les caches).
     Les paramètres non libres restent à (N, k, a, n) de `manuel`, (c, p) de `cp` et D_e de `de`."""
     th, (ts, w), de_fit = F.ajuster_couplage_partiel(F.prepare(cube), de, None if refit else np.array(manuel),
-                                                     libres=libres, theta_fixe=list(manuel)[:4] + list(cp))
+                                                     libres=libres, theta_fixe=list(manuel)[:4] + list(cp), tmax=tmax)
     return (tuple(float(v) for v in th), (tuple(float(t) for t in ts), tuple(float(v) for v in w)), float(de_fit))
 
 
 @_memoise
-def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage, couplage=None, _progression=None):
-    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube), couplage=couplage)
+def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage, couplage=None, tmax=0.0, _progression=None):
+    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube), couplage=couplage, tmax=tmax)
     with _VERROU:
         avant = {k: getattr(G, k) for k, _ in params}
         try:
@@ -137,9 +138,9 @@ def _calcul(cube, segment, dates, theta, de, regul, params, groupe_mm, t_calage,
 
 
 @_memoise
-def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm, couplage=None, _progression=None):
+def _calcul_exp(cube, segment, dates, theta, de, params, groupe_mm, couplage=None, tmax=0.0, _progression=None):
     """Méthode exponentielle : retourne (tab, hist) ou ('erreur', message)."""
-    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube), couplage=couplage)
+    h = G.donnees_segment(cube, segment, np.array(theta), de, g=_donnees(cube), couplage=couplage, tmax=tmax)
     p = dict(params)
     for k in ("forcees", "interdites"):
         p[k] = E._liste(p.get(k, ""))
@@ -174,14 +175,14 @@ def _picker(seg_info, disponibles, comp_label, cube):
 
 
 @st.cache_data(show_spinner="Calcul du champ 3D du retrait…")
-def _fig_3d(cube, theta, de, dates, segs, couplage=None):
-    return R3.figure_retrait_3d(theta, de, dates, cube, _donnees(cube), segs, couplage=couplage)
+def _fig_3d(cube, theta, de, dates, segs, couplage=None, tmax=0.0):
+    return R3.figure_retrait_3d(theta, de, dates, cube, _donnees(cube), segs, couplage=couplage, tmax=tmax)
 
 
-def _courbe_w(couplage, theta):
-    """w(t) estimé sur les mesures et facteur de diffusion 1 + F(w(t)) qui en résulte."""
+def _courbe_w(couplage, theta, duree):
+    """w(t) estimé sur les mesures et facteur de diffusion 1 + F(w(t)) qui en résulte (sur la durée simulée)."""
     ts, w = couplage
-    mult = F.facteur_fw(couplage, theta[4], theta[5])
+    mult = F.facteur_fw(couplage, theta[4], theta[5], F.nb_pas(duree))
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ts, y=w, mode="lines+markers", name="w(t) (µm)"))
     fig.add_trace(go.Scatter(x=np.arange(len(mult)) * F.DT, y=mult, mode="lines", name="1 + F(w) = D_eff / D_e", yaxis="y2"))
@@ -199,7 +200,7 @@ def _retrait_seul(cube, job, theta, couplage=None):
     ts = list(job["dates"]); pal = px.colors.sequential.Viridis
     lignes = []
     for s in job["segs"]:
-        h = G.donnees_segment(cube, s, np.array(theta), job["de"], g=_donnees(cube), couplage=couplage)
+        h = G.donnees_segment(cube, s, np.array(theta), job["de"], g=_donnees(cube), couplage=couplage, tmax=job.get("tmax", 0.0))
         axe = h["axe_mesure"].iloc[0]
         fig = go.Figure()
         for i, t in enumerate(ts):
@@ -341,6 +342,11 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
                                       help="D_eff = D_e·(1 + c·(w/100 µm)^p). Utilisé seulement si c n'est pas libre."),
                       q2.number_input("p (couplage F(w))", value=1.0, min_value=0.3, max_value=4.0, step=0.1, format="%.2f",
                                       help="Exposant de F(w). Utilisé seulement si p n'est pas libre."))
+            tmax = st.number_input("Durée simulée du retrait (jours ; 0 = automatique)", min_value=0.0, max_value=2000.0,
+                                   value=0.0, step=1.0, format="%.1f",
+                                   help="0 : automatique, jusqu'à la dernière date des données (recommandé). Une valeur imposée "
+                                        "plus courte que les données fige le retrait au-delà ; plus longue, elle ne change rien "
+                                        "aux dates mesurées.")
             vals, vexp = {}, {}
             if not seul and exp:
                 st.markdown("**Fissuration : exponentielle (shear lag)**")
@@ -373,7 +379,7 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
             t_cal = min(t_sel, key=lambda t: abs(t - t_cal_sel))
             st.session_state["fissuration_jobs"] = dict(
                 t_calage=float(t_cal), cube=cube, segs=segs, dates=tuple(sorted(t_sel)), regul=regul, refit=refit, de=de, seul=seul,
-                methode=methode, exp_params=vexp, theta=tuple(th), fw=fw, libres=libres, cp=tuple(cp),
+                methode=methode, exp_params=vexp, theta=tuple(th), fw=fw, libres=libres, cp=tuple(cp), tmax=float(tmax),
                 groupe=vexp.get("groupe", vals.get("GROUPE_MM", GROUPE_DEFAUT)),
                 params=tuple((k, vals[k]) for k, *_ in PARAMS_FISSURATION if k in vals))
     job = st.session_state.get("fissuration_jobs")
@@ -386,9 +392,10 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     libres = job.get("libres", F.LIBRES_DEFAUT)
     try:
         if fw:
-            theta, couplage, de_fit = _theta_fw(cube, job["de"], job["refit"], job["theta"], libres, job.get("cp", (0.01, 1.0)))
+            theta, couplage, de_fit = _theta_fw(cube, job["de"], job["refit"], job["theta"], libres, job.get("cp", (0.01, 1.0)),
+                                                job.get("tmax", 0.0))
         else:
-            theta, de_fit = _theta(cube, job["de"], job["refit"], job["theta"], libres)
+            theta, de_fit = _theta(cube, job["de"], job["refit"], job["theta"], libres, job.get("tmax", 0.0))
     except ValueError as e:
         st.error(str(e))
         return
@@ -403,8 +410,15 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
     noms = tuple(F.PARAM_NOMS_FW if fw else F.PARAM_NOMS) + ("D_e",)
     for col, nom, v, f, u, a in zip(st.columns(7), noms, tuple(theta) + (de_fit,), formats, unites, ajuste):
         col.metric(f"{nom} ({'ajusté' if a else 'imposé'})", f.format(v) + (f" {u}" if u else ""))
+    t_der = float(g["temps_ecoule_j"].max())
+    duree = F.duree_simulee([t_der], job.get("tmax", 0.0))
+    st.caption(f"Durée simulée du retrait : {duree:.2f} j ("
+               + ("automatique, dernière date des données" if not job.get("tmax") else "imposée") + f" ; dernière mesure : {t_der:.1f} j).")
+    if duree < t_der - 1e-9:
+        st.warning(f"La durée simulée ({duree:.1f} j) est plus courte que les données ({t_der:.1f} j) : "
+                   "le retrait modélisé est figé au-delà, et l'écart se reporte sur le résidu (fissures).")
     if fw:
-        _courbe_w(couplage, theta)
+        _courbe_w(couplage, theta, duree)
     _, col_cube, _ = st.columns([1, 1, 1])
     with col_cube:
         st.plotly_chart(make_multi_cube(df_full, tuple(job["segs"]), ()), width="stretch", key="cube_tab11")
@@ -416,7 +430,8 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
                    help="Champ ε = −a·α₃D^n sur une grille 24³ du cube, curseur de temps ; les fibres choisies sont "
                         "superposées (points colorés par la mesure, même échelle). C'est le retrait de la matrice modélisé."):
         t3d = tuple(float(t) for t in np.sort(_donnees(cube)["temps_ecoule_j"].unique()))
-        st.plotly_chart(_fig_3d(cube, tuple(float(v) for v in theta), float(job["de"]), t3d, tuple(job["segs"]), couplage),
+        st.plotly_chart(_fig_3d(cube, tuple(float(v) for v in theta), float(job["de"]), t3d, tuple(job["segs"]), couplage,
+                                job.get("tmax", 0.0)),
                         width="stretch", key="retrait3d_fig")
     if seul:
         return
@@ -439,10 +454,10 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
         if exp:
             p = {k2: (tuple(v) if isinstance(v, list) else v) for k2, v in job["exp_params"].items() if k2 != "groupe"}
             r = _calcul_exp(cube, s, job["dates"], theta, job["de"], tuple(sorted(p.items(), key=lambda kv: kv[0])), job["groupe"], couplage,
-                           _progression=suivi(k, s))
+                           job.get("tmax", 0.0), _progression=suivi(k, s))
         else:
             r = _calcul(cube, s, job["dates"], theta, job["de"], job["regul"], job["params"], job["groupe"], job["t_calage"], couplage,
-                        _progression=suivi(k, s))
+                        job.get("tmax", 0.0), _progression=suivi(k, s))
         if isinstance(r[0], str):
             st.warning(f"Segment {s} : {r[1]}")
         else:
@@ -508,7 +523,9 @@ def render(cube, personnalise, df_full, make_multi_cube, comp_label):
 
     with st.expander("📜 Script Python reproductible (notebook)"):
         if exp:
-            st.code(sg.gen_fissuration_exp(cube, job["segs"], job["dates"], theta, job["de"], False, job["exp_params"], couplage), language="python")
+            st.code(sg.gen_fissuration_exp(cube, job["segs"], job["dates"], theta, job["de"], False, job["exp_params"], couplage,
+                                           job.get("tmax", 0.0)), language="python")
         else:
             st.code(sg.gen_fissuration(cube, job["segs"], job["dates"], theta, job["de"], False, job["regul"],
-                                       job["params"], job["groupe"], job["t_calage"], couplage), language="python")
+                                       job["params"], job["groupe"], job["t_calage"], couplage, job.get("tmax", 0.0)),
+                    language="python")

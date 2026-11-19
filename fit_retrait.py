@@ -61,9 +61,9 @@ DE_DEFAUT = 3.7e-7   # m2/s, moyenne géométrique de 2e-7 et 7e-7
 C0 = 1.25            # mol/m3 : CO2 à 3 % dans l'air (20 °C, 1 atm)
 DX = 0.001           # m, pas du maillage 1D
 DT = 0.25            # jours, pas de temps
-TMAX = 114.0         # jours
+TMAX = None          # jours simulés : None = automatique (dernière date des données évaluées) ; un nombre = durée imposée
+TMAX_DEFAUT = 114.0  # jours : durée utilisée quand aucune date n'est connue (alpha_1d appelé seul)
 NX = int(L / 2 / DX) + 1
-NSTEP = int(TMAX / DT)
 M_DOMMAGE = 2.0      # exposant de sensibilité m du dommage (fixé)
 PARAM_NOMS = ("N", "k", "a", "n", "beta", "alpha_crit")
 PARAM_NOMS_FW = ("N", "k", "a", "n", "c", "p")   # mode couplage F(w) : D_eff = D_e (1 + c (w/W_REF)^p)
@@ -95,19 +95,38 @@ def prepare(cube: str, n_dates: int = N_DATES, bin_mm: float = BIN_MM) -> pd.Dat
     return g[dans & g["eps"].notna()].reset_index(drop=True)
 
 
+def duree_simulee(t_donnees=None, tmax=None) -> float:
+    """Durée simulée (jours). tmax (à défaut, la constante TMAX) > 0 : durée imposée. None ou <= 0 : automatique,
+    dernière date de t_donnees arrondie au pas de temps supérieur (TMAX_DEFAUT si aucune date)."""
+    tmax = TMAX if tmax is None else tmax
+    if tmax is not None and tmax > 0:
+        return float(tmax)
+    t = np.asarray([] if t_donnees is None else t_donnees, float)
+    t = t[np.isfinite(t)]
+    return TMAX_DEFAUT if t.size == 0 else float(np.ceil(t.max() / DT - 1e-9) * DT)
+
+
+def nb_pas(duree: float) -> int:
+    """Nombre de pas de temps couvrant `duree` (un pas de marge : la dernière date reste à l'intérieur de la grille)."""
+    return max(int(np.ceil(duree / DT - 1e-9)), 1) + 1
+
+
 def alpha_1d(N: float, k: float, De: float, beta: float, alpha_crit: float,
-             m: float = M_DOMMAGE, mult_t: np.ndarray | None = None) -> np.ndarray:
-    """alpha(t, x) sur une demi-dalle [0, L/2], tableau (NSTEP+1, NX).
+             m: float = M_DOMMAGE, mult_t: np.ndarray | None = None, nstep: int | None = None) -> np.ndarray:
+    """alpha(t, x) sur une demi-dalle [0, L/2], tableau (nstep+1, NX), t = 0, DT, ..., nstep·DT.
+    nstep : nombre de pas (défaut : len(mult_t), sinon nb_pas(duree_simulee()) ).
 
     D_eff(x, t) = De * (1 + beta * max(0, alpha - alpha_crit)**m) : la fissuration
     (liée à la carbonatation locale) accélère la diffusion du CO2.
-    mult_t (NSTEP,) : facteur (1 + F(w(t))) du couplage piloté par les données, appliqué à tout x."""
+    mult_t (nstep,) : facteur (1 + F(w(t))) du couplage piloté par les données, appliqué à tout x."""
+    if nstep is None:
+        nstep = len(mult_t) if mult_t is not None else nb_pas(duree_simulee())
     al = np.zeros(NX)
-    out = np.zeros((NSTEP + 1, NX))
+    out = np.zeros((nstep + 1, NX))
     ab = np.zeros((3, NX))
     h = 1 / DX ** 2
     rhs = np.zeros(NX); rhs[0] = 1.0
-    for s in range(NSTEP):
+    for s in range(nstep):
         d_eff = De * (1 + beta * np.maximum(0.0, al - alpha_crit) ** m)   # vecteur, taille NX
         if mult_t is not None:
             d_eff = d_eff * mult_t[s]
@@ -124,8 +143,9 @@ def alpha_1d(N: float, k: float, De: float, beta: float, alpha_crit: float,
 
 
 def alpha_3d(A, X, Y, Z, t_jours):
-    """Combinaison 3D de alpha_1D, interpolation bilinéaire en (t, distance à la face)."""
-    it = np.clip(t_jours / DT, 0, NSTEP - 1e-9)
+    """Combinaison 3D de alpha_1D, interpolation bilinéaire en (t, distance à la face).
+    Au-delà de la durée simulée (A.shape[0] - 1 pas), alpha reste à sa dernière valeur."""
+    it = np.clip(t_jours / DT, 0, A.shape[0] - 1 - 1e-9)
     i0 = it.astype(int); ft = it - i0
     reste = 1.0
     for p in (X, Y, Z):
@@ -138,33 +158,42 @@ def alpha_3d(A, X, Y, Z, t_jours):
     return 1 - reste
 
 
-def facteur_fw(couplage, c: float, p: float) -> np.ndarray:
-    """1 + F(w(t)) sur la grille de temps du modèle ; couplage = (dates, w en µm), w croissant."""
+def facteur_fw(couplage, c: float, p: float, nstep: int | None = None) -> np.ndarray:
+    """1 + F(w(t)) sur la grille de temps du modèle ; couplage = (dates, w en µm), w croissant.
+    nstep : nombre de pas (défaut : durée simulée couvrant les dates du couplage)."""
     dates, w = couplage
-    w_t = np.interp(np.arange(NSTEP) * DT, np.asarray(dates, float), np.asarray(w, float))
+    if nstep is None:
+        nstep = nb_pas(duree_simulee(dates))
+    w_t = np.interp(np.arange(nstep) * DT, np.asarray(dates, float), np.asarray(w, float))
     return 1 + c * (w_t / W_REF) ** p
 
 
-def modele(theta, g: pd.DataFrame, De: float = DE_DEFAUT, couplage=None) -> np.ndarray:
+def modele(theta, g: pd.DataFrame, De: float = DE_DEFAUT, couplage=None, tmax=None) -> np.ndarray:
     """Retrait de la matrice (µε) aux points de g.
 
     Sans couplage : theta = (N, k, a, n, beta, alpha_crit).
-    Avec couplage = (dates, w) : theta = (N, k, a, n, c, p), D_eff = D_e (1 + c (w/W_REF)^p)."""
+    Avec couplage = (dates, w) : theta = (N, k, a, n, c, p), D_eff = D_e (1 + c (w/W_REF)^p).
+    tmax : durée simulée (j) ; None : constante TMAX, automatique par défaut (dernière date de g)."""
+    t = g["temps_ecoule_j"].values
+    duree = duree_simulee(t, tmax)
+    if len(t) and np.nanmax(t) > duree + 1e-9:
+        warnings.warn(f"durée simulée {duree:g} j < dernière date {np.nanmax(t):.1f} j : retrait figé au-delà", stacklevel=2)
+    nstep = nb_pas(duree)
     if couplage is None:
         N, k, a, n, beta, alpha_crit = (list(theta) + [0.0, 0.3][len(theta) - 4:])[:6]   # 4 valeurs : sans dommage
-        A = alpha_1d(N, k, De, beta, alpha_crit)
+        A = alpha_1d(N, k, De, beta, alpha_crit, nstep=nstep)
     else:
         N, k, a, n, c, p = theta
-        A = alpha_1d(N, k, De, 0.0, 0.3, mult_t=facteur_fw(couplage, c, p))
+        A = alpha_1d(N, k, De, 0.0, 0.3, mult_t=facteur_fw(couplage, c, p, nstep))
     alpha = alpha_3d(A, g["X"].values, g["Y"].values, g["Z"].values, g["temps_ecoule_j"].values)
     return -a * alpha ** n
 
 
-def ouverture_donnees(g: pd.DataFrame, theta, De: float = DE_DEFAUT, couplage=None):
+def ouverture_donnees(g: pd.DataFrame, theta, De: float = DE_DEFAUT, couplage=None, tmax=None):
     """w(t) estimée à partir des mesures : par fibre et par date, intégrale de (mesure - retrait) le long
     de la fibre (= somme des ouvertures), puis moyenne des fibres. Retourne (dates, w en µm) avec w >= 0
     croissant (fissures irréversibles) et w(0) = 0."""
-    h = g.assign(res=g["eps"].values - modele(theta, g, De, couplage))
+    h = g.assign(res=g["eps"].values - modele(theta, g, De, couplage, tmax))
     lignes = []
     for (seg, t), q in h.groupby(["segment", "temps_ecoule_j"]):
         axe = q["axe_mesure"].iloc[0]
@@ -180,8 +209,9 @@ BORNES_DE = (np.log(1e-8), np.log(1e-5))   # m2/s, D_e optimisé en espace logar
 
 
 def ajuster_partiel(g: pd.DataFrame, theta_fixe=None, De: float = DE_DEFAUT, libres=LIBRES_DEFAUT, w: float = W_FISSURE,
-                    couplage=None):
+                    couplage=None, tmax=None):
     """Ajustement de l'enveloppe basse (perte asymétrique) sur une partie des paramètres seulement.
+    tmax : durée simulée (j), voir modele.
 
     libres : 7 booléens (N, k, a, n, beta, alpha_crit, D_e) ; en mode couplage, (beta, alpha_crit) -> (c, p).
     Les paramètres non libres restent aux valeurs de theta_fixe (6 valeurs ; 4 acceptées : beta = 0, alpha_crit = 0,3)
@@ -223,7 +253,7 @@ def ajuster_partiel(g: pd.DataFrame, theta_fixe=None, De: float = DE_DEFAUT, lib
                          f"{etat['n']} | écoulé : {time.time() - etat['t0']:.0f} s")
         sys.stderr.flush()
         v = complet(q)
-        r = modele(v[:6], g, v[6], couplage) - eps
+        r = modele(v[:6], g, v[6], couplage, tmax) - eps
         return np.where(r < 0, np.sqrt(w) * r, r)   # r < 0 : mesure au-dessus du modèle
 
     # départs des paramètres libres : (N0, k0) de DEPARTS, a = 6000, n = 1, beta|c = 1, alpha_crit = 0,3 | p = 1, D_e = De
@@ -246,37 +276,37 @@ def ajuster_partiel(g: pd.DataFrame, theta_fixe=None, De: float = DE_DEFAUT, lib
     return v[:6], float(v[6])
 
 
-def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE, couplage=None) -> np.ndarray:
+def ajuster(g: pd.DataFrame, De: float = DE_DEFAUT, w: float = W_FISSURE, couplage=None, tmax=None) -> np.ndarray:
     """Ajustement de l'enveloppe basse (perte asymétrique), multi-départs sur (N, k), les 6 paramètres libres et D_e fixé.
     Avec couplage = (dates, w) : les deux derniers paramètres sont (c, p) au lieu de (beta, alpha_crit)."""
-    return ajuster_partiel(g, None, De, LIBRES_DEFAUT, w, couplage)[0]
+    return ajuster_partiel(g, None, De, LIBRES_DEFAUT, w, couplage, tmax)[0]
 
 
 def ajuster_couplage_partiel(g: pd.DataFrame, De: float = DE_DEFAUT, theta_ref=None, iterations: int = 2,
-                             w: float = W_FISSURE, libres=LIBRES_DEFAUT, theta_fixe=None):
+                             w: float = W_FISSURE, libres=LIBRES_DEFAUT, theta_fixe=None, tmax=None):
     """Couplage F(w) avec une partie des paramètres fixée (voir ajuster_partiel ; libres porte sur (N, k, a, n, c, p, D_e)).
     theta_ref (dommage en alpha) initialise w ; s'il est absent, un ajustement standard est fait d'abord, avec les mêmes
     N, k, a, n, D_e libres et beta, alpha_crit libres. Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w), De)."""
     libres = tuple(libres)
     if theta_ref is None:
         fixe_std = None if theta_fixe is None else list(theta_fixe)[:4] + [0.0, 0.3]
-        ref, De = ajuster_partiel(g, fixe_std, De, libres[:4] + (True, True, libres[6]), w)
+        ref, De = ajuster_partiel(g, fixe_std, De, libres[:4] + (True, True, libres[6]), w, tmax=tmax)
     else:
         ref = np.asarray(theta_ref, float)
     couplage, theta = None, ref
     for _ in range(max(iterations, 1)):
-        couplage = ouverture_donnees(g, theta, De, couplage)
-        theta, De = ajuster_partiel(g, theta_fixe, De, libres, w, couplage)
+        couplage = ouverture_donnees(g, theta, De, couplage, tmax)
+        theta, De = ajuster_partiel(g, theta_fixe, De, libres, w, couplage, tmax)
     return theta, couplage, De
 
 
 def ajuster_couplage(g: pd.DataFrame, De: float = DE_DEFAUT, theta_ref=None, iterations: int = 2,
-                     w: float = W_FISSURE):
+                     w: float = W_FISSURE, tmax=None):
     """Couplage F(w) piloté par les données. Point fixe : w(t) mesuré avec le retrait courant, ajustement
     de (N, k, a, n, c, p), puis w(t) recalculé avec ce nouveau retrait. theta_ref (6 valeurs, dommage en alpha)
     initialise w ; s'il est absent, un ajustement standard est fait d'abord.
     Retourne (theta = (N, k, a, n, c, p), couplage = (dates, w en µm))."""
-    theta, couplage, _ = ajuster_couplage_partiel(g, De, theta_ref, iterations, w)
+    theta, couplage, _ = ajuster_couplage_partiel(g, De, theta_ref, iterations, w, tmax=tmax)
     return theta, couplage
 
 
@@ -327,7 +357,10 @@ if __name__ == "__main__":
     ap.add_argument("--couplage", action="store_true",
                     help="couplage F(w) piloté par les données : D_eff = D_e (1 + c (w/100 µm)^p) au lieu du dommage en alpha")
     ap.add_argument("--plot", help="fichier PNG des profils (segments d'intérêt)")
+    ap.add_argument("--tmax", type=float, default=None, metavar="JOURS",
+                    help="durée simulée du retrait (défaut : automatique, dernière date des données)")
     args = ap.parse_args()
+    TMAX = args.tmax
 
     g = prepare(args.cube)
     couplage = None

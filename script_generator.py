@@ -622,7 +622,7 @@ def _txt_couplage(couplage) -> str:
     return repr(([round(float(t), 3) for t in couplage[0]], [round(float(w), 3) for w in couplage[1]]))
 
 
-def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_mm, t_calage=None, couplage=None) -> str:
+def gen_fissuration(cube, segs, dates, theta, de, refit, regul, params, groupe_mm, t_calage=None, couplage=None, tmax=0.0) -> str:
     """Script autonome : retrait + décomposition en gaussiennes (mêmes modules que le dashboard).
 
     Le code de fit_retrait.py et de fissuration_gaussiennes.py est embarqué tel quel (chaînes brutes)
@@ -669,6 +669,7 @@ THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, be
 COUPLAGE_FW = {couplage is not None!r}                # True : D_eff = D_e (1 + c (w/100 µm)^p) piloté par les données, au lieu du dommage en alpha
 COUPLAGE = {_txt_couplage(couplage)}   # (dates, w en µm) de w(t) estimé sur les mesures ; None : recalculé
 REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n, beta, alpha_crit) sur le cube (~10 s)
+TMAX = {float(tmax or 0.0)!r}                         # durée simulée du retrait (jours) ; 0 = automatique (dernière date des données)
 T_CALAGE = {None if t_calage is None else round(float(t_calage), 3)!r}   # échéance où les gaussiennes sont calées (None = dernière)
 REGULARISATION = {bool(regul)!r}                      # ajustement global : w_i(t) croissant, sigma_i(t) lisse
 GROUPE_MM = {float(groupe_mm)!r}                      # regroupement a posteriori des gaussiennes voisines (diffus)
@@ -676,6 +677,7 @@ GROUPE_MM = {float(groupe_mm)!r}                      # regroupement a posterior
 
 # ===================== Calcul =====================
 F.CSV = {{CUBE: CSV_PATH}}
+F.TMAX = TMAX or None
 g_prep = F.prepare(CUBE, bin_mm=1)                    # données allégées (même pas que l'analyse de fissuration)
 if COUPLAGE_FW and (REAJUSTER_RETRAIT or COUPLAGE is None):
     THETA, COUPLAGE = F.ajuster_couplage(F.prepare(CUBE), DE, THETA)
@@ -719,7 +721,7 @@ R3.figure_retrait_3d(THETA, DE, DATES, CUBE, g_prep, SEGMENTS, couplage=COUPLAGE
     return _build(titre, corps)
 
 
-def gen_fissuration_exp(cube, segs, dates, theta, de, refit, params, couplage=None) -> str:
+def gen_fissuration_exp(cube, segs, dates, theta, de, refit, params, couplage=None, tmax=0.0) -> str:
     """Script autonome : retrait + décomposition exponentielle (shear lag). Embarque fit_retrait.py,
     fissuration_gaussiennes.py (lecture des données), fissuration_cisaillement.py et retrait_3d.py ; `params` = réglages de l'onglet."""
     titre = "Fissuration : retrait + décomposition exponentielle (shear lag)"
@@ -768,6 +770,7 @@ THETA = {[float(x) for x in theta]!r}                 # retrait : N, k, a, n, be
 COUPLAGE_FW = {couplage is not None!r}                # True : D_eff = D_e (1 + c (w/100 µm)^p) piloté par les données, au lieu du dommage en alpha
 COUPLAGE = {_txt_couplage(couplage)}   # (dates, w en µm) de w(t) estimé sur les mesures ; None : recalculé
 REAJUSTER_RETRAIT = {bool(refit)!r}                   # True : ré-ajuste (N, k, a, n, beta, alpha_crit) sur le cube (~10 s)
+TMAX = {float(tmax or 0.0)!r}                         # durée simulée du retrait (jours) ; 0 = automatique (dernière date des données)
 GROUPE_MM = {float(params.get("groupe", 8.0))!r}      # regroupement a posteriori des fissures voisines
 # Réglages de la méthode exponentielle (voir la théorie de l'onglet) :
 #   multi, glouton, fond, signe, plancher, preset, lam_global ('auto' ou m-1 ou None), forcees / interdites (mm, texte),
@@ -781,6 +784,7 @@ PARAMS_EXP["interdites"] = S._liste(PARAMS_EXP.get("interdites", ""))
 
 # ===================== Calcul =====================
 F.CSV = {{CUBE: CSV_PATH}}
+F.TMAX = TMAX or None
 g_prep = F.prepare(CUBE, bin_mm=1)                    # données allégées (même pas que l'analyse de fissuration)
 if COUPLAGE_FW and (REAJUSTER_RETRAIT or COUPLAGE is None):
     THETA, COUPLAGE = F.ajuster_couplage(F.prepare(CUBE), DE, THETA)

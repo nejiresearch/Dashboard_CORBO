@@ -137,15 +137,16 @@ class Suivi:
         return sse
 
 
-def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1, g=None, couplage=None):
+def donnees_segment(cube, segment, theta, de=F.DE_DEFAUT, bin_mm=1, g=None, couplage=None, tmax=None):
     """g : données déjà préparées par F.prepare (évite de relire le CSV, utile pour le dashboard).
-    couplage = (dates, w) : mode F(w) piloté par les données, theta = (N, k, a, n, c, p)."""
+    couplage = (dates, w) : mode F(w) piloté par les données, theta = (N, k, a, n, c, p).
+    tmax : durée simulée du retrait (j) ; None : automatique (voir F.duree_simulee)."""
     if g is None:
         g = F.prepare(cube, bin_mm=bin_mm)
     h = g[g["segment"] == segment].copy()
     if h.empty:
         raise SystemExit(f"segment {segment} absent (ou exclu) pour {cube}")
-    h["mod"] = F.modele(theta, h, de, couplage)
+    h["mod"] = F.modele(theta, h, de, couplage, tmax)
     h["r"] = h["eps"] - h["mod"]
     return h
 
@@ -418,6 +419,8 @@ if __name__ == "__main__":
     ap.add_argument("--de", type=float, default=F.DE_DEFAUT, help="D_e utilisé avec --theta (m2/s)")
     ap.add_argument("--refit", action="store_true", help="ré-ajuste le retrait sur le cube (≈ 10 s)")
     ap.add_argument("--couplage", action="store_true", help="ajuste le retrait avec le couplage F(w) piloté par les données (≈ 30 s)")
+    ap.add_argument("--tmax", type=float, default=None, metavar="JOURS",
+                    help="durée simulée du retrait (défaut : automatique, dernière date des données)")
     ap.add_argument("--avant", action="store_true", help="ancien ordre chronologique (centres déterminés à t0)")
     ap.add_argument("--fusion", action="store_true", help="autorise la fusion (déconseillé)")
     ap.add_argument("--sans-regul", action="store_true", help="pas d'ajustement global régularisé (option D)")
@@ -426,6 +429,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     warnings.filterwarnings("ignore")
+    F.TMAX = args.tmax
     theta = np.array(args.theta if args.theta else THETA_DEFAUT)
     couplage = None
     if args.couplage:
