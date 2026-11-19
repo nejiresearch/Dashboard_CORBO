@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
+.config/
+.ipynb_checkpoints/
+.streamlit/
