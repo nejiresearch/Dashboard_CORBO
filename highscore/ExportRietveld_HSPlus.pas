@@ -275,7 +275,8 @@ var
   p, k: Integer;
   total: Double;
 const
-  CellNames: array[0..5] of string = ('a (A)', 'b (A)', 'c (A)', 'alpha (deg)', 'beta (deg)', 'gamma (deg)');
+  CellNames: array[0..5] of string = ('a (A)            ', 'b (A)            ', 'c (A)            ',
+                                      'alpha (deg)      ', 'beta (deg)       ', 'gamma (deg)      ');
   UVWNames: array[0..2] of string = ('U', 'V', 'W');
 begin
   Log.Add('==================================================================');
@@ -318,7 +319,7 @@ begin
     Log.Add('    Facteur d''echelle : ' + Format('%e', [PhaseScale(p)]));
     Log.Add('    R-Bragg           : ' + F(PhaseRBragg(p), 3));
     for k := 0 to 5 do
-      Log.Add('    ' + CellNames[k] + StringOfChar(' ', 14 - Length(CellNames[k])) + ': ' + F(PhaseCell(p, k), 5));
+      Log.Add('    ' + CellNames[k] + ': ' + F(PhaseCell(p, k), 5));
     Log.Add('    Volume (A3)       : ' + F(PhaseVolume(p), 3));
     for k := 0 to 2 do
       Log.Add('    ' + UVWNames[k] + '                 : ' + F(PhaseProfileUVW(p, k), 5));
