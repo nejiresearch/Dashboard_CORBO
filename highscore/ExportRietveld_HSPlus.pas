@@ -45,14 +45,13 @@ end;
 
 function CleanName(S: string): string;
 // remplace les caracteres genants pour un nom de colonne / fichier
-var
-  k: Integer;
 begin
-  Result := S;
-  for k := 1 to Length(Result) do
-    if (Result[k] = ' ') or (Result[k] = SEP) or (Result[k] = '\') or
-       (Result[k] = '/') or (Result[k] = ':') or (Result[k] = '.') then
-      Result[k] := '_';
+  Result := StringReplace(S,      ' ', '_', [rfReplaceAll]);
+  Result := StringReplace(Result, ';', '_', [rfReplaceAll]);
+  Result := StringReplace(Result, '\', '_', [rfReplaceAll]);
+  Result := StringReplace(Result, '/', '_', [rfReplaceAll]);
+  Result := StringReplace(Result, ':', '_', [rfReplaceAll]);
+  Result := StringReplace(Result, '.', '_', [rfReplaceAll]);
 end;
 
 procedure CheckIfDocExists;
