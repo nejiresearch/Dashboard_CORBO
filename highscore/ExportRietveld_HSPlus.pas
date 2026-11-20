@@ -24,7 +24,7 @@ program ExportRietveldHSPlus;
 
 const
   // ---- Parametres utilisateur ------------------------------------------
-  LAMBDA        = 1.540598;  // Longueur d'onde K-alpha1 en Angstrom (Cu)
+  WAVELENGTH        = 1.540598;  // Longueur d'onde K-alpha1 en Angstrom (Cu)
                              // Co : 1.788965 ; Mo : 0.709300 ; Fe : 1.936042
   EXPORT_POINTS = True;      // False = ne produire que le .log (test rapide)
   SEP           = ';';       // separateur CSV (';' compatible Excel FR)
@@ -253,8 +253,8 @@ begin
 
     line := F(vTth, 4) + SEP;
     if Sin(vTh) > 0 then
-      line := line + F(LAMBDA / (2.0 * Sin(vTh)), 5) + SEP +
-                     F(4.0 * Pi * Sin(vTh) / LAMBDA, 5) + SEP
+      line := line + F(WAVELENGTH / (2.0 * Sin(vTh)), 5) + SEP +
+                     F(4.0 * Pi * Sin(vTh) / WAVELENGTH, 5) + SEP
     else
       line := line + F(NA, 0) + SEP + F(NA, 0) + SEP;
     line := line + F(vObs, 2) + SEP + F(vCalc, 2) + SEP + F(IBkg(i), 2) + SEP +
@@ -285,7 +285,7 @@ begin
   Log.Add('Fichier scan         : ' + ScanFileName);
   Log.Add('Date mesure          : ' + ScanTimeStamp);
   Log.Add('Sample ID            : ' + SampleID);
-  Log.Add('Longueur d''onde (A)  : ' + F(LAMBDA, 6) + '  (constante du script)');
+  Log.Add('Longueur d''onde (A)  : ' + F(WAVELENGTH, 6) + '  (constante du script)');
   if EXPORT_POINTS then
   begin
     Log.Add('Nombre de points     : ' + IntToStr(NbPoints));
